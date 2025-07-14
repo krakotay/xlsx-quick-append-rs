@@ -31,5 +31,6 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: maturin-wheels
+          name: wheels-python${{ matrix.python-version }}
           path: target/wheels/*.whl
+        
