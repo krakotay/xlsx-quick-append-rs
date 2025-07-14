@@ -1,20 +1,18 @@
 [package]
 name = "rust-core"
-version = "0.1.0"
-edition = "2024"
-
-[profile.test]
-debug = true
+version.workspace  = true   # брать из [workspace.package]
+edition.workspace  = true   # брать из [workspace.package]
 
 [lib]
 name = "rust_core"
 path = "src/lib.rs"
 test = true
 
+[profile.test]
+debug = true
+
 [dependencies]
-anyhow = "1.0.98"
-quick-xml = "0.38.0"
-tempfile = "3.20.0"
-zip = { version = "4.3.0", default-features = false, features = ["deflate"] }
-# [profile.release]
-# debug = true
+anyhow      = "1.0.98"
+quick-xml   = "0.38.0"
+tempfile    = "3.20.0"
+zip         = { version = "4.3.0", default-features = false, features = ["deflate"] }
