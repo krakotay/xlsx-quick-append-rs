@@ -1,0 +1,35 @@
+name: Build maturin wheels
+
+on:
+  workflow_dispatch:  # или push, pull_request и т.д.
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheels
+        run: |
+          maturin build --release -m python-bindings/Cargo.toml --interpreter python${{ matrix.python-version }}
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: maturin-wheels
+          path: target/wheels/*.whl
