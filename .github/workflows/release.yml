@@ -1,7 +1,11 @@
 name: Build maturin wheels
 
 on:
-  workflow_dispatch:  # или push, pull_request и т.д.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.1.2)'
+        required: true
 
 jobs:
   build:
@@ -47,8 +51,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.ref_name }}
-          name: Release v${{ github.ref_name }}
+          tag_name: v${{ inputs.version }}
+          name: Release v${{ inputs.version }}
           files: dist/**/*.whl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
