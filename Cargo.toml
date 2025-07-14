@@ -1,18 +1,5 @@
-[package]
-name = "xlsx-append-rs"
-version = "0.1.0"
-edition = "2024"
-
-[profile.test]
-debug = true
-
-[lib]
-test = true
-
-[dependencies]
-anyhow = "1.0.98"
-quick-xml = "0.38.0"
-tempfile = "3.20.0"
-zip = { version = "4.3.0", default-features = false, features = ["deflate"] }
-# [profile.release]
-# debug = true
+[workspace]
+members = [
+    "rust-core",
+    "python-bindings"
+]

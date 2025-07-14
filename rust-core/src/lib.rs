@@ -139,17 +139,21 @@ impl XlsxEditor {
                 for val in cells {
                     let coord = format!("{}{}", col as char, row_num);
                     let val_str = val.to_string();
-                    let is_number = val_str.parse::<f64>().is_ok();
+                    let is_formula = val_str.starts_with('=');
+                    let is_number = !is_formula && val_str.parse::<f64>().is_ok();
 
                     {
                         let mut c_elem =
                             w.create_element("c").with_attribute(("r", coord.as_str()));
-                        if !is_number {
+                        if !is_number && !is_formula {
                             c_elem = c_elem.with_attribute(("t", "inlineStr"));
                         }
                         c_elem.write_inner_content(|w2| {
                             use quick_xml::events::BytesText;
-                            if !is_number {
+                            if is_formula {
+                                w2.create_element("f")
+                                    .write_text_content(BytesText::new(&val_str[1..]))?;
+                            } else if !is_number {
                                 w2.create_element("is").write_inner_content(|w3| {
                                     w3.create_element("t")
                                         .write_text_content(BytesText::new(&val_str))?;
@@ -182,17 +186,6 @@ impl XlsxEditor {
         }
     }
 
-    /// Appends multiple rows (a table) to the end of the current sheet.
-    ///
-    /// This function iterates through the provided rows, and for each row, it iterates through its cells.
-    /// Each cell's value is converted to a string, and its type (number or inline string) is inferred.
-    /// The new rows are then appended to the sheet's XML content.
-    ///
-    /// # Arguments
-    /// * `rows` - An iterator over iterators of values that can be converted to strings, representing the rows and cells of the table.
-    ///
-    /// # Returns
-    /// A `Result` indicating success or an `anyhow::Error` if the operation fails.
     /// Appends multiple rows (a table) to the end of the current sheet.
     ///
     /// This function iterates through the provided rows, and for each row, it iterates through its cells.
@@ -239,16 +232,20 @@ impl XlsxEditor {
                     for (col_idx, val) in row.into_iter().enumerate() {
                         let coord = format!("{}{}", col_idx_to_letters(col_idx), row_num);
                         let val_str = val.to_string();
-                        let is_number = val_str.parse::<f64>().is_ok();
+                        let is_formula = val_str.starts_with('=');
+                        let is_number = !is_formula && val_str.parse::<f64>().is_ok();
 
                         let mut c_elem =
                             w.create_element("c").with_attribute(("r", coord.as_str()));
-                        if !is_number {
+                        if !is_number && !is_formula {
                             c_elem = c_elem.with_attribute(("t", "inlineStr"));
                         }
                         c_elem.write_inner_content(|w2| {
                             use quick_xml::events::BytesText;
-                            if !is_number {
+                            if is_formula {
+                                w2.create_element("f")
+                                    .write_text_content(BytesText::new(&val_str[1..]))?;
+                            } else if !is_number {
                                 w2.create_element("is").write_inner_content(|w3| {
                                     w3.create_element("t")
                                         .write_text_content(BytesText::new(&val_str))?;
@@ -280,18 +277,6 @@ impl XlsxEditor {
         }
     }
 
-    /// Appends multiple rows (a table) starting at a specified coordinate in the current sheet.
-    ///
-    /// This function allows inserting a table at a specific cell coordinate (e.g., "A1", "C5").
-    /// If the target rows already exist, their cells will be updated. If the target rows are beyond
-    /// the current last row, new rows will be appended.
-    ///
-    /// # Arguments
-    /// * `start_coord` - The starting cell coordinate (e.g., "A1") where the table should begin.
-    /// * `rows` - An iterator over iterators of values that can be converted to strings, representing the rows and cells of the table.
-    ///
-    /// # Returns
-    /// A `Result` indicating success or an `anyhow::Error` if the operation fails.
     /// Appends multiple rows (a table) starting at a specified coordinate in the current sheet.
     ///
     /// This function allows inserting a table at a specific cell coordinate (e.g., "A1", "C5").
@@ -371,15 +356,20 @@ impl XlsxEditor {
                                 abs_row
                             );
                             let val_str = val.to_string();
-                            let is_number = val_str.parse::<f64>().is_ok();
+                            let is_formula = val_str.starts_with('=');
+                            let is_number = !is_formula && val_str.parse::<f64>().is_ok();
+
                             let mut c_elem =
                                 w.create_element("c").with_attribute(("r", coord.as_str()));
-                            if !is_number {
+                            if !is_number && !is_formula {
                                 c_elem = c_elem.with_attribute(("t", "inlineStr"));
                             }
                             c_elem.write_inner_content(|w2| {
                                 use quick_xml::events::BytesText;
-                                if !is_number {
+                                if is_formula {
+                                    w2.create_element("f")
+                                        .write_text_content(BytesText::new(&val_str[1..]))?;
+                                } else if !is_number {
                                     w2.create_element("is").write_inner_content(|w3| {
                                         w3.create_element("t")
                                             .write_text_content(BytesText::new(&val_str))?;
@@ -394,6 +384,7 @@ impl XlsxEditor {
                         }
                         Ok(())
                     })?;
+
                 bulk_rows_xml.extend_from_slice(&writer.into_inner());
                 // Update the last row number if necessary.
                 self.last_row = abs_row;
@@ -425,17 +416,6 @@ impl XlsxEditor {
     ///
     /// # Returns
     /// A `Result` indicating success or an `anyhow::Error` if the operation fails.
-    /// Sets the value of a specific cell in the sheet.
-    ///
-    /// This function allows updating an existing cell or creating a new one if it doesn't exist.
-    /// The cell type (number or inline string) is inferred based on whether the value can be parsed as a float.
-    ///
-    /// # Arguments
-    /// * `coord` - The cell coordinate (e.g., "A1", "B2").
-    /// * `value` - The value to set for the cell, which can be converted to a string.
-    ///
-    /// # Returns
-    /// A `Result` indicating success or an `anyhow::Error` if the operation fails.
     pub fn set_cell<S: ToString>(&mut self, coord: &str, value: S) -> Result<()> {
         // Extract row number from coordinate.
         let row_start = coord
@@ -446,18 +426,22 @@ impl XlsxEditor {
             .context("invalid row number in cell coordinate")?;
 
         let val_str = value.to_string();
-        let is_number = val_str.parse::<f64>().is_ok();
+        let is_formula = val_str.starts_with('=');
+        let is_number = !is_formula && val_str.parse::<f64>().is_ok();
 
         // Generate XML for the new cell.
         let mut cell_writer = Writer::new(Vec::new());
         // Create cell element with coordinate and type attributes.
         let mut c_elem = cell_writer.create_element("c").with_attribute(("r", coord));
-        if !is_number {
+        if !is_number && !is_formula {
             c_elem = c_elem.with_attribute(("t", "inlineStr"));
         }
         c_elem.write_inner_content(|w2| {
             use quick_xml::events::BytesText;
-            if !is_number {
+            if is_formula {
+                w2.create_element("f")
+                    .write_text_content(BytesText::new(&val_str[1..]))?;
+            } else if !is_number {
                 // For strings, use <is><t> tags.
                 w2.create_element("is").write_inner_content(|w3| {
                     w3.create_element("t")
@@ -542,23 +526,58 @@ impl XlsxEditor {
                 self.sheet_xml.splice(row_start..row_end, row_slice);
             }
         } else {
-            // If the row does not exist, create a new row and append it.
+            // If the row does not exist, create a new row and insert it in the correct order so that
+            // the `<row>` elements remain sorted by the `r` attribute.  Keeping the rows ordered
+            // avoids Excel "recovered records" errors that occur when rows are out of sequence.
             let mut new_row_xml = Vec::new();
             new_row_xml.extend_from_slice(b"<row r=\"");
             new_row_xml.extend_from_slice(row_num.to_string().as_bytes());
             new_row_xml.extend_from_slice(b"\">");
             new_row_xml.extend_from_slice(&cell_xml);
             new_row_xml.extend_from_slice(b"</row>");
-            // Find the closing </sheetData> tag and insert the new row before it.
-            if let Some(pos) = self
-                .sheet_xml
-                .windows(12)
-                .rposition(|w| w == b"</sheetData>")
-            {
-                self.sheet_xml.splice(pos..pos, new_row_xml);
-            } else {
-                bail!("</sheetData> tag not found");
+
+            // Try to find the first existing row whose `r` value is greater than the new row.
+            // If found, we will insert the new row *before* it, otherwise we fall back to
+            // inserting just before `</sheetData>` (the previous behaviour).
+            let mut insert_pos: Option<usize> = None;
+            let mut search_idx = 0;
+            while let Some(rel) = self.sheet_xml[search_idx..].windows(7).position(|w| w == b"<row r=") {
+                let abs = search_idx + rel;
+                // Find the opening quote for the `r` attribute.
+                if let Some(first_quote) = self.sheet_xml[abs..].iter().position(|&b| b == b'"') {
+                    let num_start = abs + first_quote + 1;
+                    // Find the closing quote for the `r` attribute.
+                    if let Some(end_quote) = self.sheet_xml[num_start..].iter().position(|&b| b == b'"') {
+                        let num_bytes = &self.sheet_xml[num_start..num_start + end_quote];
+                        if let Ok(num_str) = std::str::from_utf8(num_bytes) {
+                            if let Ok(existing_r) = num_str.parse::<u32>() {
+                                if existing_r > row_num {
+                                    insert_pos = Some(abs);
+                                    break;
+                                }
+                            }
+                        }
+                        // Continue searching after this row tag.
+                        search_idx = num_start + end_quote;
+                    } else {
+                        break; // Malformed XML (should not happen)
+                    }
+                } else {
+                    break; // Malformed XML (should not happen)
+                }
             }
+
+            let pos = match insert_pos {
+                Some(p) => p,
+                None => self
+                    .sheet_xml
+                    .windows(12)
+                    .rposition(|w| w == b"</sheetData>")
+                    .context("</sheetData> tag not found")?,
+            };
+
+            self.sheet_xml.splice(pos..pos, new_row_xml);
+
         }
 
         if row_num > self.last_row {

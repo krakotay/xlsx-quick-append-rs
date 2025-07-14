@@ -1,0 +1,13 @@
+[package]
+name = "xlsx_append_py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "xlsx_append_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.25.1", features = ["extension-module"] }
+rust-core = { path = "../rust-core" }  # вот оно, подключение библиотеки
+anyhow = "1.0.98"
