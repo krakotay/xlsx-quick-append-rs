@@ -33,4 +33,23 @@ jobs:
         with:
           name: wheels-python${{ matrix.python-version }}
           path: target/wheels/*.whl
-        
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist  # всё в папку dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.ref_name }}
+          name: Release v${{ github.ref_name }}
+          files: dist/**/*.whl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                
