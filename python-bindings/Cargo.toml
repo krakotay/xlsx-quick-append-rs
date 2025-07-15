@@ -11,3 +11,4 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.25.1", features = ["extension-module"] }
 rust-core = { path = "../rust-core" }  # вот оно, подключение библиотеки
 anyhow = "1.0.98"
+pyo3-polars = "0.22.0"

@@ -18,6 +18,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 urls = { Homepage = "https://github.com/krakotay/xlsx-quick-append-rs", Issues = "https://github.com/krakotay/xlsx-quick-append-rs/issues" }
+dependencies = [
+    "pyarrow>=20"        # или без версии: "pyarrow"
+]
 
 [tool.maturin]
 bindings = "pyo3"

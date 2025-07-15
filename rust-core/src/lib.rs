@@ -7,10 +7,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use polars_core::prelude::*;
 use quick_xml::{Reader, Writer, events::Event};
 use tempfile::NamedTempFile;
-use zip::{CompressionMethod, ZipWriter, read::ZipArchive, write::FileOptions};
-
 
 /// `XlsxEditor` provides functionality to open, modify, and save XLSX files.
 /// It allows appending rows and tables to a specified sheet within an XLSX file.
@@ -18,15 +17,92 @@ pub struct XlsxEditor {
     /// The path to the source XLSX file.
     src_path: PathBuf,
     /// The internal path to the sheet XML file within the XLSX archive (e.g., "xl/worksheets/sheet1.xml").
-    sheet_path: String, 
+    sheet_path: String,
     /// The raw XML content of the sheet being edited.
-    sheet_xml: Vec<u8>, 
+    sheet_xml: Vec<u8>,
     /// The last row number identified in the sheet, used for appending new rows.
-    last_row: u32,      
+    last_row: u32,
 }
 
-
 impl XlsxEditor {
+    /// Clears all existing rows from the currently opened sheet.
+    ///
+    /// This removes every `<row>` element inside the `<sheetData>` section and resets
+    /// `self.last_row` to `0` so that subsequent writes start at the first row.
+    fn _clear_sheet(&mut self) -> Result<()> {
+        // Locate the opening <sheetData …> tag.
+        let start_opt = self
+            .sheet_xml
+            .windows(10) // length of "<sheetData"
+            .position(|w| w == b"<sheetData");
+        let start_idx = match start_opt {
+            Some(idx) => idx,
+            None => bail!("<sheetData> tag not found"),
+        };
+
+        // Find the end of the opening tag, i.e. the first '>' after the tag start.
+        let open_tag_end = self.sheet_xml[start_idx..]
+            .iter()
+            .position(|&b| b == b'>')
+            .map(|rel| start_idx + rel + 1)
+            .context("Malformed <sheetData> tag")?;
+
+        // Locate the closing </sheetData> tag.
+        let end_opt = self
+            .sheet_xml
+            .windows(12) // length of "</sheetData>"
+            .position(|w| w == b"</sheetData>");
+        let end_idx = match end_opt {
+            Some(idx) => idx,
+            None => bail!("</sheetData> tag not found"),
+        };
+
+        // Remove everything between the tags.
+        self.sheet_xml.drain(open_tag_end..end_idx);
+        // Reset state.
+        self.last_row = 0;
+        Ok(())
+    }
+
+    /// Overwrites the specified `sheet_name` with the provided Polars `DataFrame`.
+    ///
+    /// The function opens the workbook, completely clears any existing data inside the
+    /// sheet, then writes the column names followed by the DataFrame's rows.  Writing
+    /// starts from the coordinate provided in `start_cell` or "A1" when `None`.
+    ///
+    /// Note: The workbook on disk is **overwritten**. If you need to keep the original
+    pub fn with_polars(
+        &mut self,
+        df: &DataFrame,
+        start_cell: Option<&str>,
+    ) -> Result<()> {
+        // Remove existing data so that the DataFrame overwrites the sheet.
+        // self.clear_sheet()?;
+
+        // Helper – convert the entire DataFrame into Vec<Vec<String>> where the first
+        // row contains column headers.
+        let mut rows: Vec<Vec<String>> = Vec::with_capacity(df.height() + 1);
+        // 1. Header row.
+        rows.push(df.get_columns().iter().map(|s| s.name().to_string()).collect());
+        // 2. Data rows.
+        for row_idx in 0..df.height() {
+            let mut row = Vec::with_capacity(df.width());
+            for series in df.get_columns() {
+                let cell_val = series
+                    .get(row_idx)
+                    .map(|v| v.to_string())
+                    .unwrap_or_default();
+                row.push(cell_val);
+            }
+            rows.push(row);
+        }
+
+        // Determine the starting coordinate.
+        let start_coord = start_cell.unwrap_or("A1");
+        // Write the table and save.
+        self.append_table_at(start_coord, rows)?;
+        Ok(())
+    }
     /// Opens an XLSX file and prepares a specific sheet for editing by its name.
     ///
     /// This function first scans the workbook to find the sheet ID corresponding to the given sheet name,
@@ -40,7 +116,11 @@ impl XlsxEditor {
     /// A `Result` containing an `XlsxEditor` instance if successful, or an `anyhow::Error` otherwise.
     pub fn open<P: AsRef<Path>>(src: P, sheet_name: &str) -> Result<Self> {
         let sheet_names = scan(src.as_ref())?;
-        let sheet_id = sheet_names.iter().position(|n| n == sheet_name).context(format!("Sheet '{}' not found", sheet_name))? + 1;
+        let sheet_id = sheet_names
+            .iter()
+            .position(|n| n == sheet_name)
+            .context(format!("Sheet '{}' not found", sheet_name))?
+            + 1;
         println!("Sheet ID: {} with name {}", sheet_id, sheet_name);
         Self::open_sheet(src, sheet_id)
     }
@@ -57,19 +137,19 @@ impl XlsxEditor {
     /// A `Result` containing an `XlsxEditor` instance if successful, or an `anyhow::Error` otherwise.
     pub fn open_sheet<P: AsRef<Path>>(src: P, sheet_id: usize) -> Result<Self> {
         let src_path = src.as_ref().to_path_buf();
-        let mut zip = ZipArchive::new(File::open(&src_path)?)?;
-        
+        let mut zip = ::zip::ZipArchive::new(File::open(&src_path)?)?;
+
         // Read workbook.xml to get sheet information
         let mut wb = zip
             .by_name("xl/workbook.xml")
             .context("workbook.xml not found")?;
         let mut wb_xml = Vec::with_capacity(wb.size() as usize);
         wb.read_to_end(&mut wb_xml)?;
-        drop(wb); 
+        drop(wb);
 
         let mut reader = Reader::from_reader(wb_xml.as_slice());
         reader.config_mut().trim_text(true);
-        
+
         // Construct the sheet XML path (e.g., "xl/worksheets/sheet1.xml")
         let sheet_path = format!("xl/worksheets/sheet{}.xml", sheet_id);
 
@@ -109,7 +189,6 @@ impl XlsxEditor {
             last_row,
         })
     }
-
 
     /// Appends a single row of cells to the end of the current sheet.
     ///
@@ -541,13 +620,18 @@ impl XlsxEditor {
             // inserting just before `</sheetData>` (the previous behaviour).
             let mut insert_pos: Option<usize> = None;
             let mut search_idx = 0;
-            while let Some(rel) = self.sheet_xml[search_idx..].windows(7).position(|w| w == b"<row r=") {
+            while let Some(rel) = self.sheet_xml[search_idx..]
+                .windows(7)
+                .position(|w| w == b"<row r=")
+            {
                 let abs = search_idx + rel;
                 // Find the opening quote for the `r` attribute.
                 if let Some(first_quote) = self.sheet_xml[abs..].iter().position(|&b| b == b'"') {
                     let num_start = abs + first_quote + 1;
                     // Find the closing quote for the `r` attribute.
-                    if let Some(end_quote) = self.sheet_xml[num_start..].iter().position(|&b| b == b'"') {
+                    if let Some(end_quote) =
+                        self.sheet_xml[num_start..].iter().position(|&b| b == b'"')
+                    {
                         let num_bytes = &self.sheet_xml[num_start..num_start + end_quote];
                         if let Ok(num_str) = std::str::from_utf8(num_bytes) {
                             if let Ok(existing_r) = num_str.parse::<u32>() {
@@ -577,7 +661,6 @@ impl XlsxEditor {
             };
 
             self.sheet_xml.splice(pos..pos, new_row_xml);
-
         }
 
         if row_num > self.last_row {
@@ -595,7 +678,9 @@ impl XlsxEditor {
     pub fn get_last_row_index(&self, columns: &str) -> Result<u32> {
         // Local helper to split coordinate like "C12" -> ("C", 12)
         fn split_coord(coord: &str) -> (String, u32) {
-            let pos = coord.find(|c: char| c.is_ascii_digit()).unwrap_or(coord.len());
+            let pos = coord
+                .find(|c: char| c.is_ascii_digit())
+                .unwrap_or(coord.len());
             let col = coord[..pos].to_ascii_uppercase();
             let row: u32 = coord[pos..].parse().unwrap_or(0);
             (col, row)
@@ -655,7 +740,9 @@ impl XlsxEditor {
             }) - 1
         }
         fn split_coord(coord: &str) -> (String, u32) {
-            let pos = coord.find(|c: char| c.is_ascii_digit()).unwrap_or(coord.len());
+            let pos = coord
+                .find(|c: char| c.is_ascii_digit())
+                .unwrap_or(coord.len());
             let col = coord[..pos].to_ascii_uppercase();
             let row: u32 = coord[pos..].parse().unwrap_or(0);
             (col, row)
@@ -711,12 +798,12 @@ impl XlsxEditor {
     /// # Returns
     /// A `Result` indicating success or an `anyhow::Error` if the save operation fails.
     pub fn save<P: AsRef<Path>>(&self, dst: P) -> Result<()> {
-        let mut zin = ZipArchive::new(File::open(&self.src_path)?)?;
+        let mut zin = ::zip::ZipArchive::new(File::open(&self.src_path)?)?;
         let mut tmp = NamedTempFile::new()?;
         {
-            let mut zout = ZipWriter::new(&mut tmp);
-            let opt: FileOptions<'_, ()> = FileOptions::default()
-                .compression_method(CompressionMethod::Deflated)
+            let mut zout = ::zip::ZipWriter::new(&mut tmp);
+            let opt: ::zip::write::FileOptions<'_, ()> = ::zip::write::FileOptions::default()
+                .compression_method(::zip::CompressionMethod::Deflated)
                 .unix_permissions(0o644);
             for i in 0..zin.len() {
                 let mut f = zin.by_index(i)?;
@@ -736,13 +823,8 @@ impl XlsxEditor {
     }
 }
 
-
-
-
-
 pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
-    
-    let mut zip = ZipArchive::new(File::open(src)?)?;
+    let mut zip = ::zip::ZipArchive::new(File::open(src)?)?;
     let mut wb = zip
         .by_name("xl/workbook.xml")
         .context("workbook.xml not found")?;
@@ -750,7 +832,6 @@ pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
     let mut wb_xml = Vec::with_capacity(wb.size() as usize);
     wb.read_to_end(&mut wb_xml)?;
 
-    
     let mut reader = Reader::from_reader(wb_xml.as_slice());
     reader.config_mut().trim_text(true);
 

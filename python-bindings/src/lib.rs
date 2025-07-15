@@ -1,9 +1,9 @@
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
-use std::path::PathBuf;
+use pyo3::prelude::*;
+use pyo3_polars::PyDataFrame;
 use rust_core::scan;
 use rust_core::XlsxEditor;
-
+use std::path::PathBuf;
 
 #[pyfunction]
 fn scan_excel(path: PathBuf) -> PyResult<Vec<String>> {
@@ -19,26 +19,44 @@ struct PyXlsxEditor {
 impl PyXlsxEditor {
     #[new]
     fn new(path: PathBuf, sheet_name: &str) -> PyResult<Self> {
-        let openned = XlsxEditor::open(path, sheet_name).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let openned = XlsxEditor::open(path, sheet_name)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(PyXlsxEditor { editor: openned })
     }
 
     fn append_row(&mut self, cells: Vec<String>) -> PyResult<()> {
-        self.editor.append_row(cells).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        self.editor
+            .append_row(cells)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn append_table_at(&mut self, cells: Vec<Vec<String>>, start_cell: &str) -> PyResult<()> {
-        self.editor.append_table_at(start_cell, cells).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        self.editor
+            .append_table_at(start_cell, cells)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
     fn last_row_index(&mut self, col_name: String) -> PyResult<u32> {
-        self.editor.get_last_row_index(&col_name).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        self.editor
+            .get_last_row_index(&col_name)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
     fn last_rows_index(&mut self, col_name: String) -> PyResult<Vec<u32>> {
-        self.editor.get_last_roww_index(&col_name).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        self.editor
+            .get_last_roww_index(&col_name)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn save(&mut self, path: PathBuf) -> PyResult<()> {
-        self.editor.save(path).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        self.editor
+            .save(path)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn with_polars(&mut self, py_df: PyDataFrame, start_cell: Option<String>) -> PyResult<()> {
+        let df = py_df.into();
+        self.editor
+            .with_polars(&df, start_cell.as_deref())
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 }
 

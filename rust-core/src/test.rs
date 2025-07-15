@@ -1,8 +1,10 @@
 #[cfg(test)]
 use crate::{XlsxEditor, scan};
+#[cfg(test)]
+use anyhow::Result;
 #[test]
 #[cfg(test)]
-fn test_insert_table_at() -> anyhow::Result<()> {
+fn test_insert_table_at() -> Result<()> {
     let file_name = "../test/test.xlsx"; // Шаблон53. РД Выборка.xlsx result.xlsx
     let sheet_names: Vec<String> = scan(file_name)?;
     let data = vec![
@@ -18,7 +20,7 @@ fn test_insert_table_at() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
-fn test_insert_cells() -> anyhow::Result<()> {
+fn test_insert_cells() -> Result<()> {
     let file_name = "../test/test.xlsx"; // Шаблон53. РД Выборка.xlsx result.xlsx
     let sheet_names: Vec<String> = scan(file_name)?;
     let mut app = XlsxEditor::open(file_name, &sheet_names[0])?;
@@ -30,7 +32,7 @@ fn test_insert_cells() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
-fn test_get_last_row_index() -> anyhow::Result<()> {
+fn test_get_last_row_index() -> Result<()> {
     let file_name = "../test/test_last_row_index.xlsx"; // Шаблон53. РД Выборка.xlsx result.xlsx
     let sheet_names: Vec<String> = scan(file_name)?;
     let app = XlsxEditor::open(file_name, &sheet_names[0])?;
@@ -41,10 +43,25 @@ fn test_get_last_row_index() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
-fn test_get_last_roww_index() -> anyhow::Result<()> {
+fn test_get_last_roww_index() -> Result<()> {
     let file_name = "../test/test_last_row_index.xlsx"; // Шаблон53. РД Выборка.xlsx result.xlsx
     let sheet_names: Vec<String> = scan(file_name)?;
     let app = XlsxEditor::open(file_name, &sheet_names[0])?;
     assert_eq!(app.get_last_roww_index("A:D")?, vec![4, 5, 8, 8]);
+    Ok(())
+}
+#[cfg(test)]
+use polars_core::prelude::*;
+#[test]
+fn test_write_polars() -> Result<()>  {
+    let file_name = "../test/test.xlsx"; // Шаблон53. РД Выборка.xlsx result.xlsx
+    let sheet_names: Vec<String> = scan(file_name)?;
+    let mut app = XlsxEditor::open(file_name, &sheet_names[0])?;
+    let s1 = Column::new("Fruit".into(), ["Apple", "Apple", "Pear"]);
+    let s2 = Column::new("Color".into(), ["Red", "Yellow", "Green"]);
+
+    let df: DataFrame = DataFrame::new(vec![s1, s2])?;
+    app.with_polars(&df, None)?;
+    app.save(file_name.to_owned() + "_appended.xlsx")?;
     Ok(())
 }
