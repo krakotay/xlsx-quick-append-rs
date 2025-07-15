@@ -51,8 +51,10 @@ fn test_get_last_roww_index() -> Result<()> {
     Ok(())
 }
 #[cfg(test)]
+#[cfg(feature = "polars")]
 use polars_core::prelude::*;
 #[test]
+#[cfg(feature = "polars")]
 fn test_write_polars() -> Result<()>  {
     let file_name = "../test/test.xlsx"; // Шаблон53. РД Выборка.xlsx result.xlsx
     let sheet_names: Vec<String> = scan(file_name)?;

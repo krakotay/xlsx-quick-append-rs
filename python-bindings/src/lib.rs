@@ -1,9 +1,12 @@
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3_polars::PyDataFrame;
+
 use rust_core::scan;
 use rust_core::XlsxEditor;
 use std::path::PathBuf;
+
+#[cfg(feature = "polars")]
+use pyo3_polars::PyDataFrame;
 
 #[pyfunction]
 fn scan_excel(path: PathBuf) -> PyResult<Vec<String>> {
@@ -51,6 +54,7 @@ impl PyXlsxEditor {
             .save(path)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
+    #[cfg(feature = "polars")]
     #[pyo3(signature = (py_df, start_cell = None))]
     fn with_polars(&mut self, py_df: PyDataFrame, start_cell: Option<String>) -> PyResult<()> {
         let df = py_df.into();

@@ -7,9 +7,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use polars_core::prelude::*;
 use quick_xml::{Reader, Writer, events::Event};
 use tempfile::NamedTempFile;
+
+#[cfg(feature = "polars")]
+use polars_core::prelude::*;
 
 /// `XlsxEditor` provides functionality to open, modify, and save XLSX files.
 /// It allows appending rows and tables to a specified sheet within an XLSX file.
@@ -71,6 +73,7 @@ impl XlsxEditor {
     /// starts from the coordinate provided in `start_cell` or "A1" when `None`.
     ///
     /// Note: The workbook on disk is **overwritten**. If you need to keep the original
+    #[cfg(feature = "polars")]
     pub fn with_polars(
         &mut self,
         df: &DataFrame,
