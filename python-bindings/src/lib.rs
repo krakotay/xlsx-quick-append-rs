@@ -9,7 +9,6 @@ use std::path::PathBuf;
 fn scan_excel(path: PathBuf) -> PyResult<Vec<String>> {
     scan(&path).map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
-
 #[pyclass]
 struct PyXlsxEditor {
     editor: XlsxEditor,
@@ -18,6 +17,7 @@ struct PyXlsxEditor {
 #[pymethods]
 impl PyXlsxEditor {
     #[new]
+    #[pyo3(signature = (path, sheet_name))]
     fn new(path: PathBuf, sheet_name: &str) -> PyResult<Self> {
         let openned = XlsxEditor::open(path, sheet_name)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -51,7 +51,7 @@ impl PyXlsxEditor {
             .save(path)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
-
+    #[pyo3(signature = (py_df, start_cell = None))]
     fn with_polars(&mut self, py_df: PyDataFrame, start_cell: Option<String>) -> PyResult<()> {
         let df = py_df.into();
         self.editor
@@ -59,10 +59,30 @@ impl PyXlsxEditor {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 }
+#[pyclass]
+struct PyXlsxScanner {
+    path: PathBuf,
+}
+#[pymethods]
+impl PyXlsxScanner {
+    #[new]
+    fn new(path: PathBuf) -> PyResult<Self> {
+        Ok(PyXlsxScanner { path })
+    }
+    fn get_sheets(&self) -> PyResult<Vec<String>> {
+        scan_excel(self.path.clone()).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+    fn open_editor(&self, sheet_name: String) -> PyResult<PyXlsxEditor> {
+        let openned = XlsxEditor::open(self.path.clone(), &sheet_name)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(PyXlsxEditor { editor: openned })
+    }
+}
 
 #[pymodule]
 fn xlsx_append_py(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyXlsxEditor>()?;
+    m.add_class::<PyXlsxScanner>()?;
     m.add_function(wrap_pyfunction!(scan_excel, m)?)?;
     Ok(())
 }
