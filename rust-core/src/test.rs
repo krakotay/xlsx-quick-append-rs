@@ -29,3 +29,22 @@ fn test_insert_cells() -> anyhow::Result<()> {
 
     Ok(())
 }
+#[test]
+fn test_get_last_row_index() -> anyhow::Result<()> {
+    let file_name = "../test/test_last_row_index.xlsx"; // Шаблон53. РД Выборка.xlsx result.xlsx
+    let sheet_names: Vec<String> = scan(file_name)?;
+    let app = XlsxEditor::open(file_name, &sheet_names[0])?;
+    assert_eq!(app.get_last_row_index("A")?, 4);
+    assert_eq!(app.get_last_row_index("B")?, 5);
+    assert_eq!(app.get_last_row_index("C")?, 8);
+    assert_eq!(app.get_last_row_index("D")?, 8);
+    Ok(())
+}
+#[test]
+fn test_get_last_roww_index() -> anyhow::Result<()> {
+    let file_name = "../test/test_last_row_index.xlsx"; // Шаблон53. РД Выборка.xlsx result.xlsx
+    let sheet_names: Vec<String> = scan(file_name)?;
+    let app = XlsxEditor::open(file_name, &sheet_names[0])?;
+    assert_eq!(app.get_last_roww_index("A:D")?, vec![4, 5, 8, 8]);
+    Ok(())
+}

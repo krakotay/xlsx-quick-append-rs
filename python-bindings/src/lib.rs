@@ -30,6 +30,12 @@ impl PyXlsxEditor {
     fn append_table_at(&mut self, cells: Vec<Vec<String>>, start_cell: &str) -> PyResult<()> {
         self.editor.append_table_at(start_cell, cells).map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
+    fn last_row_index(&mut self, col_name: String) -> PyResult<u32> {
+        self.editor.get_last_row_index(&col_name).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+    fn last_rows_index(&mut self, col_name: String) -> PyResult<Vec<u32>> {
+        self.editor.get_last_roww_index(&col_name).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
 
     fn save(&mut self, path: PathBuf) -> PyResult<()> {
         self.editor.save(path).map_err(|e| PyRuntimeError::new_err(e.to_string()))
