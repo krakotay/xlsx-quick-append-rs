@@ -52,7 +52,7 @@ fn test_get_last_roww_index() -> Result<()> {
 
 #[test]
 fn add_new_worksheet() -> Result<()> {
-    let file_name = "../test/test_new_ws.xlsx";
+    let file_name = "../test/test_new_ws.xlsx"; // fixed
     let mut app = XlsxEditor::open(file_name, &scan(file_name)?[0])?;
     let new_file_name = "../test/test_new_ws_out.xlsx";
     app.append_table_at("A1", [["Name", "Score", "Status", "Number"]])?;
