@@ -43,18 +43,38 @@ fn test_get_last_row_index() -> Result<()> {
 }
 #[test]
 fn test_get_last_roww_index() -> Result<()> {
-    let file_name = "../test/test_last_row_index.xlsx"; // Шаблон53. РД Выборка.xlsx result.xlsx
+    let file_name = "../test/test_last_row_index.xlsx";
     let sheet_names: Vec<String> = scan(file_name)?;
     let app = XlsxEditor::open(file_name, &sheet_names[0])?;
     assert_eq!(app.get_last_roww_index("A:D")?, vec![4, 5, 8, 8]);
     Ok(())
 }
+
+#[test]
+fn add_new_worksheet() -> Result<()> {
+    let file_name = "../test/test_new_ws.xlsx";
+    let mut app = XlsxEditor::open(file_name, &scan(file_name)?[0])?;
+    let new_file_name = "../test/test_new_ws_out.xlsx";
+    app.append_table_at("A1", [["Name", "Score", "Status", "Number"]])?;
+    app.save(new_file_name)?;
+
+    let mut app = XlsxEditor::open(new_file_name, &scan(new_file_name)?[0])?;
+
+    app.add_worksheet("NewSheet")?;
+    app.add_worksheet("NewSheetTwo")?;
+    let sheet_names: Vec<String> = scan(new_file_name)?;
+    println!("Sheet names: {:#?}", sheet_names);
+    assert!(sheet_names.contains(&"NewSheet".to_owned()));
+    assert!(sheet_names.contains(&"NewSheetTwo".to_owned()));
+    Ok(())
+}
+
 #[cfg(test)]
 #[cfg(feature = "polars")]
 use polars_core::prelude::*;
 #[test]
 #[cfg(feature = "polars")]
-fn test_write_polars() -> Result<()>  {
+fn test_write_polars() -> Result<()> {
     let file_name = "../test/test.xlsx"; // Шаблон53. РД Выборка.xlsx result.xlsx
     let sheet_names: Vec<String> = scan(file_name)?;
     let mut app = XlsxEditor::open(file_name, &sheet_names[0])?;

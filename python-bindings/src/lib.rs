@@ -26,7 +26,12 @@ impl PyXlsxEditor {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(PyXlsxEditor { editor: openned })
     }
-
+    #[pyo3(signature = (sheet_name))]
+    fn add_worksheet(&mut self, sheet_name: &str) -> PyResult<()> {
+        self.editor
+            .add_worksheet(sheet_name)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
     fn append_row(&mut self, cells: Vec<String>) -> PyResult<()> {
         self.editor
             .append_row(cells)

@@ -1,7 +1,7 @@
 mod test;
 
 use std::{
-    fs::{self, File},
+    fs::File,
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
 };
@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use quick_xml::{Reader, Writer, events::Event};
 use tempfile::NamedTempFile;
-use zip::{CompressionMethod, ZipArchive, ZipWriter, write::FileOptions};
+use zip::{ZipArchive, ZipWriter, write::FileOptions};
 
 #[cfg(feature = "polars")]
 use polars_core::prelude::*;
@@ -36,46 +36,206 @@ pub struct XlsxEditor {
     /// The last row number identified in the sheet, used for appending new rows.
     last_row: u32,
 }
-
 impl XlsxEditor {
+    /// Добавляет новый пустой лист с именем `sheet_name`
+    /// (он станет первым во вкладках).
+    /// Если `new_path` не указан, то будет использован текущий файл.
+    pub fn add_worksheet(&mut self, sheet_name: &str) -> Result<()> {
+        // 1) читаем исходный архив
+        let sheet_names = scan(&self.src_path)?;
+        if sheet_names.contains(&sheet_name.to_owned()) {
+            bail!("Sheet {} already exists", sheet_name);
+        }
+        let mut zin = ZipArchive::new(File::open(&self.src_path)?)?;
+
+        // ── workbook.xml
+        let mut wb = zin
+            .by_name("xl/workbook.xml")
+            .context("xl/workbook.xml not found")?;
+        let mut wb_xml = Vec::with_capacity(wb.size() as usize);
+        wb.read_to_end(&mut wb_xml)?;
+        drop(wb);
+
+        // ── workbook.xml.rels
+        let mut rels = zin
+            .by_name("xl/_rels/workbook.xml.rels")
+            .context("xl/_rels/workbook.xml.rels not found")?;
+        let mut rels_xml = Vec::with_capacity(rels.size() as usize);
+        rels.read_to_end(&mut rels_xml)?;
+        drop(rels);
+
+        // 2) определяем свободные sheetId / rId / sheet#.xml
+        let mut max_sheet_id = 0u32;
+        let mut rdr = Reader::from_reader(wb_xml.as_slice());
+        rdr.config_mut().trim_text(true);
+        while let Ok(ev) = rdr.read_event() {
+            if let Event::Empty(ref e) | Event::Start(ref e) = ev {
+                if e.name().as_ref() == b"sheet" {
+                    if let Some(id) = e.attributes().with_checks(false).flatten().find_map(|a| {
+                        (a.key.as_ref() == b"sheetId")
+                            .then(|| String::from_utf8_lossy(&a.value).into_owned())
+                    }) {
+                        max_sheet_id = max_sheet_id.max(id.parse::<u32>().unwrap_or(0));
+                    }
+                }
+            }
+            if matches!(ev, Event::Eof) {
+                break;
+            }
+        }
+        let new_sheet_id = max_sheet_id + 1;
+
+        let mut max_rid = 0u32;
+        let mut rdr = Reader::from_reader(rels_xml.as_slice());
+        rdr.config_mut().trim_text(true);
+        while let Ok(ev) = rdr.read_event() {
+            if let Event::Empty(ref e) | Event::Start(ref e) = ev {
+                if e.name().as_ref() == b"Relationship" {
+                    if let Some(id) = e.attributes().with_checks(false).flatten().find_map(|a| {
+                        (a.key.as_ref() == b"Id")
+                            .then(|| String::from_utf8_lossy(&a.value).into_owned())
+                    }) {
+                        if let Some(num) = id.strip_prefix("rId") {
+                            max_rid = max_rid.max(num.parse::<u32>().unwrap_or(0));
+                        }
+                    }
+                }
+            }
+            if matches!(ev, Event::Eof) {
+                break;
+            }
+        }
+        let new_rid = max_rid + 1;
+
+        // номер нового файла sheet#.xml
+        let mut max_sheet_file = 0usize;
+        for i in 0..zin.len() {
+            let name = zin.by_index(i)?.name().to_owned();
+            if let Some(n) = name
+                .strip_prefix("xl/worksheets/sheet")
+                .and_then(|s| s.strip_suffix(".xml"))
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                max_sheet_file = max_sheet_file.max(n);
+            }
+        }
+        let new_sheet_file = max_sheet_file + 1;
+        let new_sheet_path = format!("xl/worksheets/sheet{new}.xml", new = new_sheet_file);
+        let new_sheet_target = format!("worksheets/sheet{new}.xml", new = new_sheet_file);
+
+        // 3) формируем новые теги
+        let sheet_tag = format!(
+            r#"<sheet name="{}" sheetId="{}" r:id="rId{}"/>"#,
+            sheet_name, new_sheet_id, new_rid
+        );
+        let rel_tag = format!(
+            r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="{}"/>"#,
+            new_rid, new_sheet_target
+        );
+
+        // 4) вставляем <sheet…> сразу после открывающего <sheets …>
+        if let Some(start) = wb_xml.windows(7).position(|w| w == b"<sheets") {
+            if let Some(gt) = wb_xml[start..].iter().position(|&b| b == b'>') {
+                let pos = start + gt + 1;
+                wb_xml.splice(pos..pos, sheet_tag.as_bytes().iter().copied());
+            } else {
+                bail!("malformed <sheets> tag");
+            }
+        } else {
+            bail!("<sheets> not found in workbook.xml");
+        }
+
+        // 5) вставляем Relationship перед </Relationships>
+        if let Some(pos) = rels_xml.windows(16).rposition(|w| w == b"</Relationships>") {
+            rels_xml.splice(pos..pos, rel_tag.as_bytes().iter().copied());
+        } else {
+            bail!("</Relationships> not found in workbook.xml.rels");
+        }
+
+        // 6) минимальный XML нового листа
+        const EMPTY_SHEET: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData/>
+</worksheet>"#;
+
+        // 7) собираем новый ZIP
+        let tmp = NamedTempFile::new()?;
+        {
+            let mut zout = ZipWriter::new(&tmp);
+            let opt: FileOptions<'_, ()> = FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated)
+                .compression_level(Some(3));
+
+            for i in 0..zin.len() {
+                let file = zin.by_index_raw(i)?;
+                let name = file.name();
+                match name {
+                    "xl/workbook.xml" => {
+                        zout.start_file(name, opt)?;
+                        zout.write_all(&wb_xml)?;
+                    }
+                    "xl/_rels/workbook.xml.rels" => {
+                        zout.start_file(name, opt)?;
+                        zout.write_all(&rels_xml)?;
+                    }
+                    path if path == self.sheet_path => {
+                        // вшиваем уже изменённый текущий лист
+                        zout.start_file(path, opt)?;
+                        zout.write_all(&self.sheet_xml)?;
+                    }
+                    _ => {
+                        zout.raw_copy_file(file)?;
+                    }
+                }
+            }
+            // добавляем новый лист
+            zout.start_file(&new_sheet_path, opt)?;
+            zout.write_all(EMPTY_SHEET.as_bytes())?;
+            zout.finish()?;
+        }
+        std::fs::rename(tmp.path(), &self.src_path)?;
+
+        Ok(())
+    }
+
     /// Clears all existing rows from the currently opened sheet.
     ///
     /// This removes every `<row>` element inside the `<sheetData>` section and resets
     /// `self.last_row` to `0` so that subsequent writes start at the first row.
-    fn _clear_sheet(&mut self) -> Result<()> {
-        // Locate the opening <sheetData …> tag.
-        let start_opt = self
-            .sheet_xml
-            .windows(10) // length of "<sheetData"
-            .position(|w| w == b"<sheetData");
-        let start_idx = match start_opt {
-            Some(idx) => idx,
-            None => bail!("<sheetData> tag not found"),
-        };
+    // fn clear_sheet(&mut self) -> Result<()> {
+    //     // Locate the opening <sheetData …> tag.
+    //     let start_opt = self
+    //         .sheet_xml
+    //         .windows(10) // length of "<sheetData"
+    //         .position(|w| w == b"<sheetData");
+    //     let start_idx = match start_opt {
+    //         Some(idx) => idx,
+    //         None => bail!("<sheetData> tag not found"),
+    //     };
 
-        // Find the end of the opening tag, i.e. the first '>' after the tag start.
-        let open_tag_end = self.sheet_xml[start_idx..]
-            .iter()
-            .position(|&b| b == b'>')
-            .map(|rel| start_idx + rel + 1)
-            .context("Malformed <sheetData> tag")?;
+    //     // Find the end of the opening tag, i.e. the first '>' after the tag start.
+    //     let open_tag_end = self.sheet_xml[start_idx..]
+    //         .iter()
+    //         .position(|&b| b == b'>')
+    //         .map(|rel| start_idx + rel + 1)
+    //         .context("Malformed <sheetData> tag")?;
 
-        // Locate the closing </sheetData> tag.
-        let end_opt = self
-            .sheet_xml
-            .windows(12) // length of "</sheetData>"
-            .position(|w| w == b"</sheetData>");
-        let end_idx = match end_opt {
-            Some(idx) => idx,
-            None => bail!("</sheetData> tag not found"),
-        };
+    //     // Locate the closing </sheetData> tag.
+    //     let end_opt = self
+    //         .sheet_xml
+    //         .windows(12) // length of "</sheetData>"
+    //         .position(|w| w == b"</sheetData>");
+    //     let end_idx = match end_opt {
+    //         Some(idx) => idx,
+    //         None => bail!("</sheetData> tag not found"),
+    //     };
 
-        // Remove everything between the tags.
-        self.sheet_xml.drain(open_tag_end..end_idx);
-        // Reset state.
-        self.last_row = 0;
-        Ok(())
-    }
+    //     // Remove everything between the tags.
+    //     self.sheet_xml.drain(open_tag_end..end_idx);
+    //     // Reset state.
+    //     self.last_row = 0;
+    //     Ok(())
+    // }
 
     /// Overwrites the specified `sheet_name` with the provided Polars `DataFrame`.
     ///
@@ -804,32 +964,6 @@ impl XlsxEditor {
     ///
     /// # Returns
     /// A `Result` indicating success or an `anyhow::Error` if the save operation fails.
-    pub fn _save<P: AsRef<Path>>(&self, dst: P) -> Result<()> {
-        let mut zin = ZipArchive::new(File::open(&self.src_path)?)?;
-        let mut tmp = NamedTempFile::new()?;
-        {
-            let mut zout = ZipWriter::new(&mut tmp);
-            let opt: FileOptions<'_, ()> = FileOptions::default()
-                .compression_method(CompressionMethod::Deflated)
-                .compression_level(Some(1))
-                .unix_permissions(0o644);
-            for i in 0..zin.len() {
-                let mut f = zin.by_index(i)?;
-                let name = f.name();
-                if name == self.sheet_path.as_str() {
-                    zout.start_file::<_, ()>(name, opt)?;
-                    zout.write_all(&self.sheet_xml)?;
-                } else {
-                    zout.start_file::<_, ()>(name, opt)?;
-                    std::io::copy(&mut f, &mut zout)?;
-                }
-            }
-            zout.finish()?;
-        }
-        fs::rename(tmp.path(), dst)?;
-        Ok(())
-    }
-
     pub fn save<P: AsRef<Path>>(&self, dst: P) -> Result<()> {
         let src = self.src_path.clone();
 
