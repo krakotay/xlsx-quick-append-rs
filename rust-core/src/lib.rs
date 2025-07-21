@@ -13,6 +13,16 @@ use tempfile::NamedTempFile;
 #[cfg(feature = "polars")]
 use polars_core::prelude::*;
 
+fn check_utf8<R: std::io::BufRead>(reader: &mut Reader<R>) -> Result<()> {
+    // Reader уже посмотрел декларацию `<?xml ... encoding="..."?>`
+    // и выбрал нужный декодер.
+    let enc = reader.decoder().encoding(); // -> &'static encoding_rs::Encoding
+
+    if enc.name() != "UTF-8" {
+        bail!("unsupported XML encoding {}", enc.name());
+    }
+    Ok(())
+}
 /// `XlsxEditor` provides functionality to open, modify, and save XLSX files.
 /// It allows appending rows and tables to a specified sheet within an XLSX file.
 pub struct XlsxEditor {
@@ -74,11 +84,7 @@ impl XlsxEditor {
     ///
     /// Note: The workbook on disk is **overwritten**. If you need to keep the original
     #[cfg(feature = "polars")]
-    pub fn with_polars(
-        &mut self,
-        df: &DataFrame,
-        start_cell: Option<&str>,
-    ) -> Result<()> {
+    pub fn with_polars(&mut self, df: &DataFrame, start_cell: Option<&str>) -> Result<()> {
         // Remove existing data so that the DataFrame overwrites the sheet.
         // self.clear_sheet()?;
 
@@ -86,7 +92,12 @@ impl XlsxEditor {
         // row contains column headers.
         let mut rows: Vec<Vec<String>> = Vec::with_capacity(df.height() + 1);
         // 1. Header row.
-        rows.push(df.get_columns().iter().map(|s| s.name().to_string()).collect());
+        rows.push(
+            df.get_columns()
+                .iter()
+                .map(|s| s.name().to_string())
+                .collect(),
+        );
         // 2. Data rows.
         for row_idx in 0..df.height() {
             let mut row = Vec::with_capacity(df.width());
@@ -150,9 +161,6 @@ impl XlsxEditor {
         wb.read_to_end(&mut wb_xml)?;
         drop(wb);
 
-        let mut reader = Reader::from_reader(wb_xml.as_slice());
-        reader.config_mut().trim_text(true);
-
         // Construct the sheet XML path (e.g., "xl/worksheets/sheet1.xml")
         let sheet_path = format!("xl/worksheets/sheet{}.xml", sheet_id);
 
@@ -165,11 +173,11 @@ impl XlsxEditor {
 
         // Determine the last row number in the sheet
         let mut reader = Reader::from_reader(sheet_xml.as_slice());
+        check_utf8(&mut reader)?;
         reader.config_mut().trim_text(true);
-        let mut buf = Vec::new();
         let mut last_row = 0;
 
-        while let Ok(ev) = reader.read_event_into(&mut buf) {
+        while let Ok(ev) = reader.read_event() {
             match ev {
                 Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"row" => {
                     if let Some(r) = e.attributes().with_checks(false).flatten().find_map(|a| {
@@ -182,7 +190,6 @@ impl XlsxEditor {
                 Event::Eof => break,
                 _ => {}
             }
-            buf.clear();
         }
 
         Ok(Self {
@@ -699,10 +706,9 @@ impl XlsxEditor {
 
         let mut reader = Reader::from_reader(self.sheet_xml.as_slice());
         reader.config_mut().trim_text(true);
-        let mut buf = Vec::new();
         let mut last_row: u32 = 0;
 
-        while let Ok(ev) = reader.read_event_into(&mut buf) {
+        while let Ok(ev) = reader.read_event() {
             match ev {
                 Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"c" => {
                     // locate the coordinate attribute r="A1"
@@ -721,7 +727,6 @@ impl XlsxEditor {
                 Event::Eof => break,
                 _ => {}
             }
-            buf.clear();
         }
         Ok(last_row)
     }
@@ -763,9 +768,8 @@ impl XlsxEditor {
 
         let mut reader = Reader::from_reader(self.sheet_xml.as_slice());
         reader.config_mut().trim_text(true);
-        let mut buf = Vec::new();
 
-        while let Ok(ev) = reader.read_event_into(&mut buf) {
+        while let Ok(ev) = reader.read_event() {
             match ev {
                 Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"c" => {
                     if let Some(coord) = e.attributes().with_checks(false).flatten().find_map(|a| {
@@ -785,7 +789,6 @@ impl XlsxEditor {
                 Event::Eof => break,
                 _ => {}
             }
-            buf.clear();
         }
         Ok(per_col_last)
     }
@@ -838,10 +841,9 @@ pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
     let mut reader = Reader::from_reader(wb_xml.as_slice());
     reader.config_mut().trim_text(true);
 
-    let mut buf = Vec::new();
     let mut names = Vec::new();
 
-    while let Ok(ev) = reader.read_event_into(&mut buf) {
+    while let Ok(ev) = reader.read_event() {
         match ev {
             Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"sheet" => {
                 if let Some(n) = e.attributes().with_checks(false).flatten().find_map(|a| {
@@ -854,7 +856,6 @@ pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
             Event::Eof => break,
             _ => {}
         }
-        buf.clear();
     }
     Ok(names)
 }
