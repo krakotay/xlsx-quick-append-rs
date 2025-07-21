@@ -2,13 +2,14 @@ mod test;
 
 use std::{
     fs::{self, File},
-    io::{Read, Write},
+    io::{Cursor, Read, Write},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
 use quick_xml::{Reader, Writer, events::Event};
 use tempfile::NamedTempFile;
+use zip::{CompressionMethod, ZipArchive, ZipWriter, write::FileOptions};
 
 #[cfg(feature = "polars")]
 use polars_core::prelude::*;
@@ -151,7 +152,7 @@ impl XlsxEditor {
     /// A `Result` containing an `XlsxEditor` instance if successful, or an `anyhow::Error` otherwise.
     pub fn open_sheet<P: AsRef<Path>>(src: P, sheet_id: usize) -> Result<Self> {
         let src_path = src.as_ref().to_path_buf();
-        let mut zip = ::zip::ZipArchive::new(File::open(&src_path)?)?;
+        let mut zip = ZipArchive::new(File::open(&src_path)?)?;
 
         // Read workbook.xml to get sheet information
         let mut wb = zip
@@ -803,13 +804,14 @@ impl XlsxEditor {
     ///
     /// # Returns
     /// A `Result` indicating success or an `anyhow::Error` if the save operation fails.
-    pub fn save<P: AsRef<Path>>(&self, dst: P) -> Result<()> {
-        let mut zin = ::zip::ZipArchive::new(File::open(&self.src_path)?)?;
+    pub fn _save<P: AsRef<Path>>(&self, dst: P) -> Result<()> {
+        let mut zin = ZipArchive::new(File::open(&self.src_path)?)?;
         let mut tmp = NamedTempFile::new()?;
         {
-            let mut zout = ::zip::ZipWriter::new(&mut tmp);
-            let opt: ::zip::write::FileOptions<'_, ()> = ::zip::write::FileOptions::default()
-                .compression_method(::zip::CompressionMethod::Deflated)
+            let mut zout = ZipWriter::new(&mut tmp);
+            let opt: FileOptions<'_, ()> = FileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .compression_level(Some(1))
                 .unix_permissions(0o644);
             for i in 0..zin.len() {
                 let mut f = zin.by_index(i)?;
@@ -827,10 +829,79 @@ impl XlsxEditor {
         fs::rename(tmp.path(), dst)?;
         Ok(())
     }
+
+    pub fn save<P: AsRef<Path>>(&self, dst: P) -> Result<()> {
+        let src = self.src_path.clone();
+
+        // 1) читаем исходный архив
+        let mut zin = ZipArchive::new(File::open(src)?)?;
+
+        // 2) создаём записыватель *сразу* в конечный файл (или во временный — без разницы)
+        let fout = File::create(dst)?;
+        let mut zout = ZipWriter::new(fout);
+
+        // 3) общие опции для новых файлов
+        let opt: FileOptions<'_, ()> = FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated) // можно сбросить уровень позже
+            .compression_level(Some(3)); // Deflate level 3 ≈ в 2‑3 раза быстрее
+
+        for i in 0..zin.len() {
+            // ➜ читаем item *без* распаковки
+            let file = zin.by_index_raw(i)?; // ! важно: *_raw
+            let name = file.name();
+
+            if name == &self.sheet_path {
+                // 4) Это наш переделанный лист — пишем новую версию обычным способом
+                zout.start_file(&name, opt)?;
+                zout.write_all(&self.sheet_xml)?;
+            } else {
+                // 5) Все остальные entry копируем «как есть» —
+                //    сжатые байты + метаданные = O(диски) вместо O(диски+CPU)
+                zout.raw_copy_file(file)?; // 💡 zero‑copy внутри ZIP
+            }
+        }
+
+        zout.finish()?; // flush + записать central directory
+        Ok(())
+    }
+
+    fn _save_in_ram(
+        src: &Path,
+        dst: &Path,
+        sheet_path: &str,
+        new_xml: &[u8],
+    ) -> anyhow::Result<()> {
+        let mut zin = ZipArchive::new(File::open(src)?)?;
+
+        // 1) Буфер‑growable в RAM
+        let mut mem = Vec::with_capacity(10 * 1024 * 1024); // грубая оценка, чтобы меньше realloc
+        {
+            let cursor = Cursor::new(&mut mem);
+            let mut zout = ZipWriter::new(cursor);
+            let opt: FileOptions<'_, ()> =
+                FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+            for i in 0..zin.len() {
+                let file = zin.by_index_raw(i)?;
+                let name = file.name().to_owned();
+                if name == sheet_path {
+                    zout.start_file(&name, opt)?;
+                    zout.write_all(new_xml)?;
+                } else {
+                    zout.raw_copy_file(file)?;
+                }
+            }
+            zout.finish()?; // важно закрыть writer, иначе central dir не допишется
+        } // cursor → drop, но mem остаётся
+
+        // 2) Одним системным вызовом кладём всё на диск
+        std::fs::write(dst, &mem)?;
+        Ok(())
+    }
 }
 
 pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
-    let mut zip = ::zip::ZipArchive::new(File::open(src)?)?;
+    let mut zip = ZipArchive::new(File::open(src)?)?;
     let mut wb = zip
         .by_name("xl/workbook.xml")
         .context("workbook.xml not found")?;

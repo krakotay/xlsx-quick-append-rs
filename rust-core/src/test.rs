@@ -28,7 +28,6 @@ fn test_insert_cells() -> Result<()> {
     app.set_cell("B25", "World")?;
     app.set_cell("C25", "!")?;
     app.save(file_name.to_owned() + "_appended.xlsx")?;
-
     Ok(())
 }
 #[test]
