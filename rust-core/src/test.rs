@@ -69,7 +69,6 @@ fn add_new_worksheet() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn set_number_format() -> Result<()> {
     let file_name = "../test/numeric_format_test.xlsx";
@@ -79,6 +78,23 @@ fn set_number_format() -> Result<()> {
     app.set_number_format("A9", "#,##0.00")?;
     app.set_number_format("B3:C5", "#,##0.00")?;
     app.save(file_name_out)?;
+    Ok(())
+}
+#[test]
+fn set_style() -> Result<()> {
+    let file_name = "../test/style_test.xlsx";
+    let file_name_out = "../test/style_test_out.xlsx";
+
+    let mut xl = XlsxEditor::open(file_name, "Sheet1")?;
+
+    xl.set_fill("B14:B18", "FFFF00")?
+        .set_font("D4:D8", "Arial", 12.0, true, false)?
+        .set_fill("E4:E8", "FFCCCC")?
+        .set_font("A1:C3", "Calibri", 10.0, false, true)?
+        .set_fill("A1:C3", "FFFF00")?
+        .merge_cells("B12:D12")?;
+
+    xl.save(file_name_out)?;
     Ok(())
 }
 
