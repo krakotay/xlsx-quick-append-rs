@@ -68,6 +68,17 @@ fn add_new_worksheet() -> Result<()> {
     assert!(sheet_names.contains(&"NewSheetTwo".to_owned()));
     Ok(())
 }
+#[test]
+fn set_number_format() -> Result<()> {
+    let file_name = "../test/numeric_format_test.xlsx";
+    let file_name_out = "../test/numeric_format_test_out.xlsx";
+    let sheet_names: Vec<String> = scan(file_name)?;
+    let mut app = XlsxEditor::open(file_name, &sheet_names[0])?;
+    app.set_number_format("A9", "#,##0.00")?;
+    app.set_number_format("B3:C5", "#,##0.00")?;
+    app.save(file_name_out)?;
+    Ok(())
+}
 
 #[cfg(test)]
 #[cfg(feature = "polars")]

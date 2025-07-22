@@ -1,10 +1,11 @@
 mod test;
 
+use regex::Regex;
 use std::{
     fs::File,
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
-};
+}; // <‑‑ в Cargo.toml: regex = "1"
 
 use anyhow::{Context, Result, bail};
 use quick_xml::{Reader, Writer, events::Event};
@@ -28,16 +29,72 @@ fn check_utf8<R: std::io::BufRead>(reader: &mut Reader<R>) -> Result<()> {
 /// `XlsxEditor` provides functionality to open, modify, and save XLSX files.
 /// It allows appending rows and tables to a specified sheet within an XLSX file.
 pub struct XlsxEditor {
-    /// The path to the source XLSX file.
     src_path: PathBuf,
-    /// The internal path to the sheet XML file within the XLSX archive (e.g., "xl/worksheets/sheet1.xml").
     sheet_path: String,
-    /// The raw XML content of the sheet being edited.
     sheet_xml: Vec<u8>,
-    /// The last row number identified in the sheet, used for appending new rows.
     last_row: u32,
+    styles_xml: Vec<u8>, // ← новое поле
 }
+
 impl XlsxEditor {
+    /// Открывает книгу и подготавливает лист `sheet_id` (1‑based).
+    pub fn open_sheet<P: AsRef<Path>>(src: P, sheet_id: usize) -> Result<Self> {
+        let src_path = src.as_ref().to_path_buf();
+        let mut zip = zip_crate::ZipArchive::new(File::open(&src_path)?)?;
+
+        // ── sheet#.xml ───────────────────────────────────────────────
+        let sheet_path = format!("xl/worksheets/sheet{sheet_id}.xml");
+
+        // читаем XML листа в отдельном блоке, чтобы `sheet` дропнулся,
+        // и эксклюзивный займ `zip` освободился
+        let sheet_xml: Vec<u8> = {
+            let mut sheet = zip
+                .by_name(&sheet_path)
+                .with_context(|| format!("{sheet_path} not found"))?;
+            let mut buf = Vec::with_capacity(sheet.size() as usize);
+            sheet.read_to_end(&mut buf)?;
+            buf
+        };
+
+        // ── styles.xml ───────────────────────────────────────────────
+        let styles_xml: Vec<u8> = {
+            let mut styles = zip
+                .by_name("xl/styles.xml")
+                .context("styles.xml not found")?;
+            let mut buf = Vec::with_capacity(styles.size() as usize);
+            styles.read_to_end(&mut buf)?;
+            buf
+        };
+
+        // ── вычисляем last_row ───────────────────────────────────────
+        let mut reader = Reader::from_reader(sheet_xml.as_slice());
+        check_utf8(&mut reader)?;
+        reader.config_mut().trim_text(true);
+
+        let mut last_row = 0;
+        while let Ok(ev) = reader.read_event() {
+            match ev {
+                Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"row" => {
+                    if let Some(r) = e.attributes().with_checks(false).flatten().find_map(|a| {
+                        (a.key.as_ref() == b"r")
+                            .then(|| String::from_utf8_lossy(&a.value).into_owned())
+                    }) {
+                        last_row = r.parse::<u32>().unwrap_or(last_row);
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+
+        Ok(Self {
+            src_path,
+            sheet_path,
+            sheet_xml,
+            last_row,
+            styles_xml, // ← сохраняем
+        })
+    }
     /// Добавляет новый пустой лист с именем `sheet_name`
     /// (он станет первым во вкладках).
     /// Если `new_path` не указан, то будет использован текущий файл.
@@ -303,67 +360,6 @@ impl XlsxEditor {
             + 1;
         println!("Sheet ID: {} with name {}", sheet_id, sheet_name);
         Self::open_sheet(src, sheet_id)
-    }
-
-    /// Opens an XLSX file and prepares a specific sheet for editing by its ID.
-    ///
-    /// This involves extracting the sheet's XML content and determining the last row number.
-    ///
-    /// # Arguments
-    /// * `src` - The path to the XLSX file.
-    /// * `sheet_id` - The 1-based ID of the sheet to open (e.g., 1 for the first sheet).
-    ///
-    /// # Returns
-    /// A `Result` containing an `XlsxEditor` instance if successful, or an `anyhow::Error` otherwise.
-    pub fn open_sheet<P: AsRef<Path>>(src: P, sheet_id: usize) -> Result<Self> {
-        let src_path = src.as_ref().to_path_buf();
-        let mut zip = zip_crate::ZipArchive::new(File::open(&src_path)?)?;
-
-        // Read workbook.xml to get sheet information
-        let mut wb = zip
-            .by_name("xl/workbook.xml")
-            .context("workbook.xml not found")?;
-        let mut wb_xml = Vec::with_capacity(wb.size() as usize);
-        wb.read_to_end(&mut wb_xml)?;
-        drop(wb);
-
-        // Construct the sheet XML path (e.g., "xl/worksheets/sheet1.xml")
-        let sheet_path = format!("xl/worksheets/sheet{}.xml", sheet_id);
-
-        // Read the sheet's XML content
-        let mut sheet = zip
-            .by_name(&sheet_path)
-            .with_context(|| format!("{} not found", sheet_path))?;
-        let mut sheet_xml = Vec::with_capacity(sheet.size() as usize);
-        sheet.read_to_end(&mut sheet_xml)?;
-
-        // Determine the last row number in the sheet
-        let mut reader = Reader::from_reader(sheet_xml.as_slice());
-        check_utf8(&mut reader)?;
-        reader.config_mut().trim_text(true);
-        let mut last_row = 0;
-
-        while let Ok(ev) = reader.read_event() {
-            match ev {
-                Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"row" => {
-                    if let Some(r) = e.attributes().with_checks(false).flatten().find_map(|a| {
-                        (a.key.as_ref() == b"r")
-                            .then(|| String::from_utf8_lossy(&a.value).into_owned())
-                    }) {
-                        last_row = r.parse::<u32>().unwrap_or(last_row);
-                    }
-                }
-                Event::Eof => break,
-                _ => {}
-            }
-        }
-
-        Ok(Self {
-            src_path,
-            sheet_path,
-            sheet_xml,
-            last_row,
-        })
     }
 
     /// Appends a single row of cells to the end of the current sheet.
@@ -970,37 +966,31 @@ impl XlsxEditor {
     /// # Returns
     /// A `Result` indicating success or an `anyhow::Error` if the save operation fails.
     pub fn save<P: AsRef<Path>>(&self, dst: P) -> Result<()> {
-        let src = self.src_path.clone();
+        let mut zin = zip_crate::ZipArchive::new(File::open(&self.src_path)?)?;
+        let mut zout = zip_crate::ZipWriter::new(File::create(dst)?);
 
-        // 1) читаем исходный архив
-        let mut zin = zip_crate::ZipArchive::new(File::open(src)?)?;
-
-        // 2) создаём записыватель *сразу* в конечный файл (или во временный — без разницы)
-        let fout = File::create(dst)?;
-        let mut zout = zip_crate::ZipWriter::new(fout);
-
-        // 3) общие опции для новых файлов
         let opt: zip_crate::write::FileOptions<'_, ()> = zip_crate::write::FileOptions::default()
-            .compression_method(zip_crate::CompressionMethod::Deflated) // можно сбросить уровень позже
-            .compression_level(Some(1)); // Deflate level 3 ≈ в 2‑3 раза быстрее
+            .compression_method(zip_crate::CompressionMethod::Deflated)
+            .compression_level(Some(1));
 
         for i in 0..zin.len() {
-            // ➜ читаем item *без* распаковки
-            let file = zin.by_index_raw(i)?; // ! важно: *_raw
+            let file = zin.by_index_raw(i)?;
             let name = file.name();
 
-            if name == &self.sheet_path {
-                // 4) Это наш переделанный лист — пишем новую версию обычным способом
-                zout.start_file(&name, opt)?;
-                zout.write_all(&self.sheet_xml)?;
-            } else {
-                // 5) Все остальные entry копируем «как есть» —
-                //    сжатые байты + метаданные = O(диски) вместо O(диски+CPU)
-                zout.raw_copy_file(file)?; // 💡 zero‑copy внутри ZIP
+            match name {
+                _ if name == self.sheet_path => {
+                    zout.start_file(name, opt)?;
+                    zout.write_all(&self.sheet_xml)?;
+                }
+                "xl/styles.xml" => {
+                    zout.start_file(name, opt)?;
+                    zout.write_all(&self.styles_xml)?;
+                }
+                _ => zout.raw_copy_file(file)?,
             }
         }
 
-        zout.finish()?; // flush + записать central directory
+        zout.finish()?;
         Ok(())
     }
 
@@ -1038,6 +1028,317 @@ impl XlsxEditor {
         std::fs::write(dst, &mem)?;
         Ok(())
     }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // PUBLIC API
+    // ──────────────────────────────────────────────────────────────────────
+    pub fn set_number_format(&mut self, range: &str, fmt: &str) -> Result<()> {
+        let style_id = self.ensure_style(fmt)?;
+        match parse_target(range)? {
+            Target::Cell(c) => self.apply_style_to_cell(&c, style_id)?,
+            Target::Rect { c0, r0, c1, r1 } => {
+                for r in r0..=r1 {
+                    for c in c0..=c1 {
+                        let coord = format!("{}{}", col_letter(c), r);
+                        self.apply_style_to_cell(&coord, style_id)?;
+                    }
+                }
+            }
+            Target::Col(col) => self.apply_style_to_column(col, style_id)?,
+            Target::Row(row) => self.apply_style_to_row(row, style_id)?,
+        }
+        Ok(())
+    }
+    // ──────────────────────────────────────────────────────────────────────
+    // 1. ОБЕСПЕЧИТЬ СТИЛЬ — numFmt + xf  → вернуть styleId
+    // ──────────────────────────────────────────────────────────────────────
+    fn ensure_style(&mut self, fmt: &str) -> Result<u32> {
+        // — поиск numFmt с таким же formatCode —
+        let mut rdr = Reader::from_reader(self.styles_xml.as_slice());
+        rdr.config_mut().trim_text(true);
+        let mut max_custom_id = 163u32; // 0‑163 — builtin
+        let mut exist_fmt_id = None::<u32>;
+        while let Ok(ev) = rdr.read_event() {
+            if let Event::Start(ref e) | Event::Empty(ref e) = ev {
+                if e.name().as_ref() == b"numFmt" {
+                    let mut id = None;
+                    let mut code = None;
+                    for a in e.attributes().with_checks(false).flatten() {
+                        match a.key.as_ref() {
+                            b"numFmtId" => {
+                                id = Some(String::from_utf8_lossy(&a.value).parse::<u32>().unwrap())
+                            }
+                            b"formatCode" => {
+                                code = Some(String::from_utf8_lossy(&a.value).into_owned())
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let (Some(i), Some(c)) = (id, code) {
+                        if &c == fmt {
+                            exist_fmt_id = Some(i);
+                        }
+                        if i > max_custom_id {
+                            max_custom_id = i;
+                        }
+                    }
+                }
+            }
+            if matches!(ev, Event::Eof) {
+                break;
+            }
+        }
+        let fmt_id = exist_fmt_id.unwrap_or(max_custom_id + 1);
+
+        // — есть ли уже xf с этим numFmtId? —
+        let mut rdr = Reader::from_reader(self.styles_xml.as_slice());
+        rdr.config_mut().trim_text(true);
+        let mut in_cellxfs = false;
+        let mut xf_idx = 0u32;
+        let mut exist_style_id = None::<u32>;
+        while let Ok(ev) = rdr.read_event() {
+            match ev {
+                Event::Start(ref e) if e.name().as_ref() == b"cellXfs" => {
+                    in_cellxfs = true;
+                }
+                Event::End(ref e) if e.name().as_ref() == b"cellXfs" => {
+                    in_cellxfs = false;
+                }
+                Event::Empty(ref e) | Event::Start(ref e)
+                    if in_cellxfs && e.name().as_ref() == b"xf" =>
+                {
+                    let mut num = None;
+                    let mut apply = false;
+                    for a in e.attributes().with_checks(false).flatten() {
+                        match a.key.as_ref() {
+                            b"numFmtId" => {
+                                num =
+                                    Some(String::from_utf8_lossy(&a.value).parse::<u32>().unwrap())
+                            }
+                            b"applyNumberFormat" => apply = a.value.as_ref() == b"1",
+                            _ => {}
+                        }
+                    }
+                    if num == Some(fmt_id) && apply {
+                        exist_style_id = Some(xf_idx);
+                    }
+                    xf_idx += 1;
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        if let Some(sid) = exist_style_id {
+            return Ok(sid);
+        }
+
+        if let Some(numfmts_start) = find_bytes(&self.styles_xml, b"<numFmts") {
+            // ── уже есть блок <numFmts> ───────────────
+            // найдём его конец: </numFmts>
+            if let Some(numfmts_end) =
+                find_bytes_from(&self.styles_xml, b"</numFmts>", numfmts_start)
+            {
+                // вставим перед </numFmts>
+                let insert_pos = numfmts_end;
+                let new_fmt = format!(
+                    r#"<numFmt numFmtId="{id}" formatCode="{}"/>"#,
+                    fmt,
+                    id = fmt_id
+                );
+                self.styles_xml
+                    .splice(insert_pos..insert_pos, new_fmt.as_bytes().iter().copied());
+
+                // увеличим count="…"
+                if let Some(count_start) =
+                    find_bytes_from(&self.styles_xml, b"count=\"", numfmts_start)
+                {
+                    let count_end = self.styles_xml[count_start + 7..]
+                        .iter()
+                        .position(|&c| c == b'"')
+                        .map(|p| count_start + 7 + p).ok_or(anyhow::anyhow!("Strange mistake with numFmts"))?;
+                    let old_count =
+                        std::str::from_utf8(&self.styles_xml[count_start + 7..count_end])?
+                            .parse::<u32>()?;
+                    let new_count = old_count + 1;
+                    let count_str = new_count.to_string();
+                    self.styles_xml.splice(
+                        count_start + 7..count_end,
+                        count_str.as_bytes().iter().copied(),
+                    );
+                }
+            } else {
+                bail!("Found <numFmts> but no </numFmts>");
+            }
+        } else {
+            // ── блока <numFmts> ещё нет — создадим ───────────────────
+            let new_block = format!(
+                r#"<numFmts count="1"><numFmt numFmtId="{id}" formatCode="{}"/></numFmts>"#,
+                fmt,
+                id = fmt_id
+            );
+
+            let insert_pos = find_bytes(&self.styles_xml, b"<fonts")
+                .or_else(|| find_bytes(&self.styles_xml, b"<fills"))
+                .unwrap_or_else(|| {
+                    find_bytes(&self.styles_xml, b">").expect("no <styleSheet> start tag?") + 1
+                });
+
+            self.styles_xml
+                .splice(insert_pos..insert_pos, new_block.as_bytes().iter().copied());
+        }
+
+        // — добавляем новый xf перед </cellXfs> —
+        let new_xf = format!(
+            r#"<xf numFmtId="{id}" applyNumberFormat="1" fontId="0" fillId="0" borderId="0" xfId="0"/>"#,
+            id = fmt_id
+        );
+        if let Some(pos) = find_bytes(&self.styles_xml, b"</cellXfs>") {
+            self.styles_xml
+                .splice(pos..pos, new_xf.as_bytes().iter().copied());
+            bump_count(&mut self.styles_xml, b"<cellXfs", b"count=\"")?;
+            Ok(xf_idx) // предыдущий счётчик = новый styleId
+        } else {
+            bail!("styles.xml: </cellXfs> not found")
+        }
+    }
+    // ──────────────────────────────────────────────────────────────────────
+    // 3. ПРИМЕНИТЬ СТИЛЬ
+    // ──────────────────────────────────────────────────────────────────────
+    fn apply_style_to_cell(&mut self, coord: &str, style: u32) -> Result<()> {
+        // ── вычисляем номер строки, чтобы найти <row …>
+        let row_num = coord.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+
+        let row_tag = format!(r#"<row r="{row_num}""#);
+
+        // если строки нет — создаём ячейку обычным set_cell и возвращаемся
+        let row_pos = match find_bytes(&self.sheet_xml, row_tag.as_bytes()) {
+            Some(p) => p,
+            None => {
+                self.set_cell(coord, "")?;
+                return self.apply_style_to_cell(coord, style);
+            }
+        };
+
+        // конец строки </row>
+        let row_end = find_bytes_from(&self.sheet_xml, b"</row>", row_pos)
+            .ok_or_else(|| anyhow::anyhow!("</row> not found"))?;
+
+        // ── ищем ячейку <c r="A1" …>
+        let cell_tag = format!(r#"<c r="{coord}""#);
+        let cpos = match find_bytes_from(&self.sheet_xml, cell_tag.as_bytes(), row_pos) {
+            Some(p) => p, // есть — будем править
+            None => {
+                // нет — вставим пустую с нужным style перед </row>
+                let new_cell = format!(r#"<c r="{coord}" s="{style}"/>"#);
+                self.sheet_xml
+                    .splice(row_end..row_end, new_cell.as_bytes().iter().copied());
+                return Ok(());
+            }
+        };
+
+        // граница открывающего тега ячейки '>'
+        let ctag_end = find_bytes_from(&self.sheet_xml, b">", cpos)
+            .ok_or_else(|| anyhow::anyhow!("malformed <c> tag"))?;
+
+        // ── проверяем/ставим атрибут s="…"
+        if let Some(sattr) = find_bytes_from(&self.sheet_xml, b" s=\"", cpos) {
+            if sattr < ctag_end {
+                // уже есть s="…" → заменить число
+                let val_start = sattr + 4;
+                let val_end = find_bytes_from(&self.sheet_xml, b"\"", val_start + 1).unwrap();
+                self.sheet_xml.splice(
+                    val_start..val_end,
+                    style.to_string().as_bytes().iter().copied(),
+                );
+                return Ok(());
+            }
+        }
+        // атрибута нет — вставляем перед '>'
+        self.sheet_xml.splice(
+            ctag_end..ctag_end,
+            format!(r#" s="{style}""#).as_bytes().iter().copied(),
+        );
+        Ok(())
+    }
+
+    fn apply_style_to_row(&mut self, row: u32, style: u32) -> Result<()> {
+        let row_tag = format!("<row r=\"{row}\"");
+        if let Some(_pos) = find_bytes(&self.sheet_xml, row_tag.as_bytes()) {
+            let _ = &self.insert_or_replace_attr(b"s", &style.to_string());
+            let _ = &self.insert_or_replace_attr(b"customFormat", "1");
+        } else {
+            // строки нет — создаём пустую с атрибутами и вставляем по порядку
+            let new_row = format!(r#"<row r="{row}" s="{style}" customFormat="1"></row>"#);
+            // вставим перед </sheetData>
+            let pos = find_bytes(&self.sheet_xml, b"</sheetData>")
+                .ok_or_else(|| anyhow::anyhow!("</sheetData> not found"))?;
+            self.sheet_xml
+                .splice(pos..pos, new_row.as_bytes().iter().copied());
+        }
+        // дополнительно пройти по всем <c r="??row"> и проставить s
+        let pat = format!(r#" r="([A-Z]+){}""#, row);
+        let re = Regex::new(&pat).unwrap();
+        for cap in re.find_iter(std::str::from_utf8(&self.sheet_xml.clone())?) {
+            let start = cap.start();
+            if let Some(_cpos) = self.sheet_xml[..start]
+                .windows(3)
+                .rposition(|w| w == b"<c ")
+            {
+                self.apply_style_to_cell(&cap.as_str()[3..], style)?; // cap = r="A12"
+            }
+        }
+        Ok(())
+    }
+    fn apply_style_to_column(&mut self, col: u32, style: u32) -> Result<()> {
+        // 1) cols section
+        let col_tag = format!(r#"<col min="{c}" max="{c}""#, c = col + 1);
+        if let Some(_pos) = find_bytes(&self.sheet_xml, col_tag.as_bytes()) {
+            self.insert_or_replace_attr(b"style", &style.to_string());
+        } else {
+            // нет — добавим <col …/>
+            let new_col = format!(r#"<col min="{c}" max="{c}" style="{style}"/>"#, c = col + 1);
+            // перед <sheetData>
+            let pos = find_bytes(&self.sheet_xml, b"<sheetData")
+                .ok_or_else(|| anyhow::anyhow!("<sheetData> not found"))?;
+            // если блока <cols> нет, нужно создать
+            if let Some(cols_start) = find_bytes(&self.sheet_xml, b"<cols") {
+                // вставляем внутрь
+                let insert = find_bytes_from(&self.sheet_xml, b">", cols_start).unwrap() + 1;
+                self.sheet_xml
+                    .splice(insert..insert, new_col.as_bytes().iter().copied());
+            } else {
+                let block = format!(r#"<cols>{}</cols>"#, new_col);
+                self.sheet_xml
+                    .splice(pos..pos, block.as_bytes().iter().copied());
+            }
+        }
+        // 2) проставляем style всем существующим <c> в нужной колонке
+        let pat = format!(r#" r="{}[0-9]+""#, col_letter(col));
+        let re = Regex::new(&pat).unwrap();
+        for cap in re.find_iter(std::str::from_utf8(&self.sheet_xml.clone())?) {
+            let coord = &cap.as_str()[3..cap.as_str().len() - 1]; // A17
+            self.apply_style_to_cell(coord, style)?;
+        }
+        Ok(())
+    }
+
+    fn insert_or_replace_attr(&mut self, key: &[u8], val: &str) {
+        if let Some(p) = find_bytes(&self.sheet_xml, key) {
+            let start = p + key.len() + 2; //  key + ="
+            let end = find_bytes_from(&self.sheet_xml, b"\"", start).unwrap();
+            self.sheet_xml
+                .splice(start..end, val.as_bytes().iter().copied());
+        } else {
+            let end = self.sheet_xml.len() - 1; // '>'
+            self.sheet_xml.splice(
+                end..end,
+                format!(" {}=\"{}\"", std::str::from_utf8(key).unwrap(), val)
+                    .as_bytes()
+                    .iter()
+                    .copied(),
+            );
+        }
+    }
 }
 
 pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
@@ -1069,4 +1370,86 @@ pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
         }
     }
     Ok(names)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// 2. РАЗБОР ДИАПАЗОНА
+// ──────────────────────────────────────────────────────────────────────
+#[derive(Debug)]
+enum Target {
+    Cell(String),
+    Rect { c0: u32, r0: u32, c1: u32, r1: u32 },
+    Col(u32),
+    Row(u32),
+}
+fn parse_target(s: &str) -> Result<Target> {
+    let re_cell = Regex::new(r"^([A-Za-z]+)([0-9]+)$").unwrap();
+    let re_rect = Regex::new(r"^([A-Za-z]+[0-9]+):([A-Za-z]+[0-9]+)$").unwrap();
+    let re_col = Regex::new(r"^([A-Za-z]+):$").unwrap();
+    let re_row = Regex::new(r"^([0-9]+):$").unwrap();
+
+    if let Some(_caps) = re_cell.captures(s) {
+        return Ok(Target::Cell(s.to_owned()));
+    }
+    if let Some(caps) = re_rect.captures(s) {
+        let (c0, r0) = split_coord(&caps[1]);
+        let (c1, r1) = split_coord(&caps[2]);
+        return Ok(Target::Rect { c0, r0, c1, r1 });
+    }
+    if let Some(caps) = re_col.captures(s) {
+        return Ok(Target::Col(col_index(&caps[1]) as u32));
+    }
+    if let Some(caps) = re_row.captures(s) {
+        return Ok(Target::Row(caps[1].parse::<u32>()?));
+    }
+    bail!("invalid range syntax: {s}");
+}
+// ──────────────────────────────────────────────────────────────────────
+// 4. ВСПОМОГАТЕЛЬНЫЕ  (буквы ↔ индекс, split_coord, splice‑утилиты)
+// ──────────────────────────────────────────────────────────────────────
+fn col_letter(mut n: u32) -> String {
+    let mut s = String::new();
+    loop {
+        s.insert(0, (b'A' + (n % 26) as u8) as char);
+        if n < 26 {
+            break;
+        }
+        n = n / 26 - 1;
+    }
+    s
+}
+fn col_index(s: &str) -> usize {
+    s.bytes().fold(0, |acc, b| {
+        acc * 26 + (b.to_ascii_uppercase() - b'A' + 1) as usize
+    }) - 1
+}
+fn split_coord(coord: &str) -> (u32, u32) {
+    let p = coord.find(|c: char| c.is_ascii_digit()).unwrap();
+    (
+        col_index(&coord[..p]) as u32,
+        coord[p..].parse::<u32>().unwrap(),
+    )
+}
+fn find_bytes(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+fn find_bytes_from(hay: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+    hay[start..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| p + start)
+}
+
+fn bump_count(xml: &mut Vec<u8>, tag: &[u8], attr: &[u8]) -> Result<()> {
+    if let Some(pos) = find_bytes(xml, tag) {
+        if let Some(a) = find_bytes_from(xml, attr, pos) {
+            let start = a + attr.len();
+            let end = find_bytes_from(xml, b"\"", start).unwrap();
+            let mut num: u32 = std::str::from_utf8(&xml[start..end])?.parse()?;
+            num += 1;
+            xml.splice(start..end, num.to_string().as_bytes().iter().copied());
+            return Ok(());
+        }
+    }
+    Err(anyhow::anyhow!("attribute count not found"))
 }

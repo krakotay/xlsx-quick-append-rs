@@ -2331,6 +2331,7 @@ dependencies = [
  "anyhow",
  "polars-core",
  "quick-xml 0.38.0",
+ "regex",
  "tempfile",
  "zip",
 ]
