@@ -560,8 +560,8 @@ impl XlsxEditor {
                     }
                 }
             }
-            Target::Col(col) => self.apply_style_to_column(col, style_id)?,
-            Target::Row(row) => self.apply_style_to_row(row, style_id)?,
+            Target::Col(_col) => self.force_column_number_format(&range.replace(":", ""), fmt)?,
+            Target::Row(_row) => todo!(),
         }
         Ok(())
     }
@@ -871,38 +871,6 @@ impl XlsxEditor {
         }
         Ok(())
     }
-    fn apply_style_to_column(&mut self, col: u32, style: u32) -> Result<()> {
-        // 1) cols section
-        let col_tag = format!(r#"<col min="{c}" max="{c}""#, c = col + 1);
-        if let Some(_pos) = find_bytes(&self.sheet_xml, col_tag.as_bytes()) {
-            self.insert_or_replace_attr(b"style", &style.to_string());
-        } else {
-            // нет — добавим <col …/>
-            let new_col = format!(r#"<col min="{c}" max="{c}" style="{style}"/>"#, c = col + 1);
-            // перед <sheetData>
-            let pos = find_bytes(&self.sheet_xml, b"<sheetData")
-                .ok_or_else(|| anyhow::anyhow!("<sheetData> not found"))?;
-            // если блока <cols> нет, нужно создать
-            if let Some(cols_start) = find_bytes(&self.sheet_xml, b"<cols") {
-                // вставляем внутрь
-                let insert = find_bytes_from(&self.sheet_xml, b">", cols_start).unwrap() + 1;
-                self.sheet_xml
-                    .splice(insert..insert, new_col.as_bytes().iter().copied());
-            } else {
-                let block = format!(r#"<cols>{}</cols>"#, new_col);
-                self.sheet_xml
-                    .splice(pos..pos, block.as_bytes().iter().copied());
-            }
-        }
-        // 2) проставляем style всем существующим <c> в нужной колонке
-        let pat = format!(r#" r="{}[0-9]+""#, col_letter(col));
-        let re = Regex::new(&pat).unwrap();
-        for cap in re.find_iter(std::str::from_utf8(&self.sheet_xml.clone())?) {
-            let coord = &cap.as_str()[3..cap.as_str().len() - 1]; // A17
-            self.apply_style_to_cell(coord, style)?;
-        }
-        Ok(())
-    }
 
     fn insert_or_replace_attr(&mut self, key: &[u8], val: &str) {
         if let Some(p) = find_bytes(&self.sheet_xml, key) {
@@ -922,6 +890,145 @@ impl XlsxEditor {
         }
     }
 }
+
+// ────────────────────────────────────────────────────────────────
+// Multiple columns – быстрая работа со стилями столбцов
+// ────────────────────────────────────────────────────────────────
+impl XlsxEditor {
+    // ---------- вспомогалка -------------------------------------
+
+    /// Вставляет или заменяет атрибут **внутри уже найденного тега**.
+    /// `tag_start` и `tag_end` — абсолютные байтовые границы тега
+    /// в `self.sheet_xml` (конец указывает сразу за `>` или `/>`).
+    fn insert_or_replace_attr_in_tag(
+        &mut self,
+        tag_start: usize,
+        tag_end: usize,
+        key: &[u8],
+        val: &str,
+    ) {
+        // попробуем найти существующий атрибут
+        if let Some(p) = find_bytes_from(&self.sheet_xml, key, tag_start) {
+            if p < tag_end {
+                let start = p + key.len() + 2; // key="  → начало значения
+                let end = find_bytes_from(&self.sheet_xml, b"\"", start).unwrap_or(tag_end);
+                self.sheet_xml
+                    .splice(start..end, val.as_bytes().iter().copied());
+                return;
+            }
+        }
+        // не нашли — добавляем перед закрывающей > или />
+        let insert_at = tag_end
+            - if self.sheet_xml[tag_end - 2] == b'/' {
+                2
+            } else {
+                1
+            };
+        self.sheet_xml.splice(
+            insert_at..insert_at,
+            format!(" {}=\"{}\"", std::str::from_utf8(key).unwrap(), val)
+                .as_bytes()
+                .iter()
+                .copied(),
+        );
+    }
+
+    // ---------- ядро ---------------------------------------------
+
+    /// «Колончный» способ: задаёт формат через `<col … style="…"/>`
+    /// (Excel применит стиль даже к будущим ячейкам столбца).
+    pub fn set_column_number_format(&mut self, col_letter: &str, fmt: &str) -> Result<()> {
+        let style_id = self.ensure_style(Some(fmt), None, None, None)?;
+        self.apply_style_to_column(col_index(col_letter) as u32, style_id)
+    }
+
+    /// Тот же формат, но **насильно** проставляет стиль
+    /// всем существующим ячейкам столбца.
+    pub fn force_column_number_format(&mut self, col_letter: &str, fmt: &str) -> Result<()> {
+        self.set_column_number_format(col_letter, fmt)?;
+
+        let style_id = self.ensure_style(Some(fmt), None, None, None)?;
+        let sid_str = style_id.to_string();
+        let pat = format!(
+            r#"<c\b[^>]*\br="{}[0-9]+"[^>]*>"#,
+            col_letter.to_ascii_uppercase()
+        );
+        let re = Regex::new(&pat)?;
+
+        let src = std::mem::take(&mut self.sheet_xml);
+        let mut dst = Vec::with_capacity(src.len() + 512);
+        let mut last = 0usize;
+
+        for m in re.find_iter(std::str::from_utf8(&src)?) {
+            dst.extend_from_slice(&src[last..m.start()]);
+
+            let cell_start = m.start();
+            let tag_end = find_bytes_from(&src, b">", cell_start).unwrap() + 1;
+            let mut cell = src[cell_start..tag_end].to_vec();
+
+            if let Some(p) = find_bytes(&cell, b" s=\"") {
+                let v0 = p + 4;
+                let v1 = find_bytes_from(&cell, b"\"", v0 + 1).unwrap();
+                cell.splice(v0..v1, sid_str.as_bytes().iter().copied());
+            } else {
+                let ins = if cell[cell.len() - 2] == b'/' {
+                    cell.len() - 2
+                } else {
+                    cell.len() - 1
+                };
+                cell.splice(
+                    ins..ins,
+                    format!(r#" s="{}""#, sid_str).as_bytes().iter().copied(),
+                );
+            }
+            dst.extend_from_slice(&cell);
+            last = tag_end;
+        }
+        dst.extend_from_slice(&src[last..]);
+        self.sheet_xml = dst;
+        Ok(())
+    }
+
+    // ---------- низкоуровневое: работа с блоком <cols> -----------
+
+    /// Внутренняя работа со стилем столбца через тег `<col …/>`.
+    fn apply_style_to_column(&mut self, col: u32, style: u32) -> Result<()> {
+        let col_tag = format!(r#"<col min="{c}" max="{c}""#, c = col + 1);
+
+        if let Some(tag_start) = find_bytes(&self.sheet_xml, col_tag.as_bytes()) {
+            // ── тег существует, определяем его границу
+            let tag_end = if let Some(p) = find_bytes_from(&self.sheet_xml, b"/>", tag_start) {
+                p + 2 // "/>"  → длина 2
+            } else {
+                let p = find_bytes_from(&self.sheet_xml, b">", tag_start)
+                    .context("malformed <col> tag")?;
+                p + 1 // ">"   → длина 1
+            };
+            // ставим / заменяем  style="…"
+            self.insert_or_replace_attr_in_tag(tag_start, tag_end, b"style", &style.to_string());
+        } else {
+            // ‑‑ блока нет: создаём новый <col … style="…"/>
+            let new_tag = format!(r#"<col min="{c}" max="{c}" style="{style}"/>"#, c = col + 1);
+            if let Some(cols_start) = find_bytes(&self.sheet_xml, b"<cols") {
+                // вставляем в существующий блок
+                let insert = find_bytes_from(&self.sheet_xml, b">", cols_start).unwrap() + 1;
+                self.sheet_xml
+                    .splice(insert..insert, new_tag.as_bytes().iter().copied());
+            } else {
+                // создаём новый <cols> перед <sheetData>
+                let sheetdata_pos =
+                    find_bytes(&self.sheet_xml, b"<sheetData").context("<sheetData> not found")?;
+                let block = format!("<cols>{}</cols>", new_tag);
+                self.sheet_xml.splice(
+                    sheetdata_pos..sheetdata_pos,
+                    block.as_bytes().iter().copied(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Main
 impl XlsxEditor {
     /// Opens an XLSX file and prepares a specific sheet for editing by its name.

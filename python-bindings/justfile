@@ -1,4 +1,4 @@
 speed-all:
 	cd speed_tests && hyperfine "python xlsxeditor_speed.py" "python openpyxl_speed.py" --export-markdown speed-test.md -M 3
 speed-rust:
-	cd speed_tests && hyperfine "python xlsxeditor_speed.py" --export-markdown speed-test-xlsxeditor.md -m 50
+	cd speed_tests && hyperfine "python xlsxeditor_speed.py" --export-markdown speed-test-xlsxeditor.md -m 10

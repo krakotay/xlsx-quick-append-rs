@@ -9,7 +9,7 @@ scanner = PyXlsxScanner(inp_filename)
 editor = scanner.open_editor(scanner.get_sheets()[0])
 
 editor.set_fill("B24:B28", "FFFF00")\
-        .set_font("B24:B28", "Arial", 12.0, True, False)\
+        .set_font("D4:D8", "Arial", 12.0, True, False)\
         .set_fill("E4:E8", "FFCCCC")\
         .set_font("A1:C3", "Calibri", 10.0, False, True)\
         .set_fill("A1:C3", "FFFF00")\

@@ -97,6 +97,21 @@ fn set_style() -> Result<()> {
     xl.save(file_name_out)?;
     Ok(())
 }
+#[test]
+fn set_column_number_format() -> Result<()> {
+    let file_name = "../test/numeric_format_test.xlsx";
+    let file_name_out = "../test/numeric_format_column_test.xlsx";
+
+    let mut xl = XlsxEditor::open(file_name, "Sheet1")?;
+
+    xl.set_number_format("A:", "#,##0.00")?;
+    xl.set_number_format("B:", "#,##0.00")?;
+    xl.set_number_format("C:", "#,##0.00")?;
+    xl.set_number_format("G:", "#,##0.00")?;
+
+    xl.save(file_name_out)?;
+    Ok(())
+}
 
 #[cfg(test)]
 #[cfg(feature = "polars")]

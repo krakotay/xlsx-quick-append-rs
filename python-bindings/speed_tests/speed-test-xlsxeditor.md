@@ -1,3 +1,3 @@
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `python xlsxeditor_speed.py` | 394.1 ± 12.3 | 379.7 | 423.2 | 1.00 |
+| `python xlsxeditor_speed.py` | 398.1 ± 15.8 | 377.1 | 424.6 | 1.00 |
