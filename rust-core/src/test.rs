@@ -68,6 +68,8 @@ fn add_new_worksheet() -> Result<()> {
     assert!(sheet_names.contains(&"NewSheetTwo".to_owned()));
     Ok(())
 }
+
+
 #[test]
 fn set_number_format() -> Result<()> {
     let file_name = "../test/numeric_format_test.xlsx";
