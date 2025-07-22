@@ -13,7 +13,7 @@ debug = true
 
 [dependencies]
 anyhow      = "1.0.98"
-# memmap2 = "0.9.7"
+mimalloc = "0.1.47"
 polars-core = { version = "0.49.1", optional = true }
 quick-xml = { version = "0.38.0", features = ["encoding"] }
 regex = "1.11.1"
