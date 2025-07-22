@@ -1,10 +1,9 @@
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-use rust_core::scan;
-use rust_core::XlsxEditor;
+use pyo3::PyRefMut;
+use rust_core::{scan, XlsxEditor};
 use std::path::PathBuf;
-
 
 #[cfg(feature = "polars")]
 use pyo3_polars::PyDataFrame;
@@ -68,6 +67,58 @@ impl PyXlsxEditor {
             .with_polars(&df, start_cell.as_deref())
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
+    fn set_number_format<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        range: &str,
+        fmt: &str,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.editor
+            .set_number_format(range, fmt)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(slf)
+    }
+
+    fn set_fill<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        range: &str,
+        fmt: &str,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.editor
+            .set_fill(range, fmt)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(slf)
+    }
+    fn set_font<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        range: &str,
+        name: &str,
+        size: f32,
+        bold: bool,
+        italic: bool,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.editor
+            .set_font(range, name, size, bold, italic)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(slf)
+    }
+    fn merge_cells<'py>(mut slf: PyRefMut<'py, Self>, range: &str) -> PyResult<PyRefMut<'py, Self>> {
+        slf.editor
+            .merge_cells(range)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(slf)
+    }
+
+    // set_font
+    // fn set_number_format(&mut self, range: &str, fmt: &str) -> PyResult<()> {
+    //     self.editor
+    //         .set_number_format(range, fmt)
+    //         .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    // }
+    // fn set_number_format(&mut self, range: &str, fmt: &str) -> PyResult<()> {
+    //     self.editor
+    //         .set_number_format(range, fmt)
+    //         .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    // }
 }
 #[pyclass]
 struct PyXlsxScanner {
