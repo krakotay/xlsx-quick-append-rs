@@ -9,7 +9,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use quick_xml::{Reader, Writer, events::Event};
 use tempfile::NamedTempFile;
-use zip::{ZipArchive, ZipWriter, write::FileOptions};
+// use zip::{ZipArchive, ZipWriter, write::FileOptions};
+use ::zip as zip_crate;
 
 #[cfg(feature = "polars")]
 use polars_core::prelude::*;
@@ -46,7 +47,7 @@ impl XlsxEditor {
         if sheet_names.contains(&sheet_name.to_owned()) {
             bail!("Sheet {} already exists", sheet_name);
         }
-        let mut zin = ZipArchive::new(File::open(&self.src_path)?)?;
+        let mut zin = zip_crate::ZipArchive::new(File::open(&self.src_path)?)?;
 
         // ── workbook.xml
         let mut wb = zin
@@ -133,16 +134,19 @@ impl XlsxEditor {
             new_rid, new_sheet_target
         );
 
-        // 4) вставляем <sheet…> сразу после открывающего <sheets …>
-        if let Some(start) = wb_xml.windows(7).position(|w| w == b"<sheets") {
-            if let Some(gt) = wb_xml[start..].iter().position(|&b| b == b'>') {
-                let pos = start + gt + 1;
-                wb_xml.splice(pos..pos, sheet_tag.as_bytes().iter().copied());
-            } else {
-                bail!("malformed <sheets> tag");
-            }
+        // 4) вставляем <sheet …/> перед закрывающим </sheets>
+        if let Some(pos) = wb_xml
+            .windows(9) // длина "</sheets>"
+            .rposition(|w| w == b"</sheets>")
+        {
+            // небольшая косметика: перенос + два пробела, чтобы сохранить формат
+            let mut tagged = Vec::with_capacity(sheet_tag.len() + 3);
+            tagged.extend_from_slice(b"\n  "); // \n, отступ
+            tagged.extend_from_slice(sheet_tag.as_bytes());
+
+            wb_xml.splice(pos..pos, tagged);
         } else {
-            bail!("<sheets> not found in workbook.xml");
+            bail!("</sheets> not found in workbook.xml");
         }
 
         // 5) вставляем Relationship перед </Relationships>
@@ -154,17 +158,18 @@ impl XlsxEditor {
 
         // 6) минимальный XML нового листа
         const EMPTY_SHEET: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <sheetData/>
-</worksheet>"#;
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <sheetData> </sheetData>
+        </worksheet>"#;
 
         // 7) собираем новый ZIP
         let tmp = NamedTempFile::new()?;
         {
-            let mut zout = ZipWriter::new(&tmp);
-            let opt: FileOptions<'_, ()> = FileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated)
-                .compression_level(Some(3));
+            let mut zout = zip_crate::ZipWriter::new(&tmp);
+            let opt: zip_crate::write::FileOptions<'_, ()> =
+                zip_crate::write::FileOptions::default()
+                    .compression_method(zip_crate::CompressionMethod::Deflated)
+                    .compression_level(Some(3));
 
             for i in 0..zin.len() {
                 let file = zin.by_index_raw(i)?;
@@ -267,7 +272,7 @@ impl XlsxEditor {
                     .get(row_idx)
                     .map(|v| v.to_string())
                     .unwrap_or_default();
-                row.push(cell_val);
+                row.push(cell_val.replace("\"", ""));
             }
             rows.push(row);
         }
@@ -312,7 +317,7 @@ impl XlsxEditor {
     /// A `Result` containing an `XlsxEditor` instance if successful, or an `anyhow::Error` otherwise.
     pub fn open_sheet<P: AsRef<Path>>(src: P, sheet_id: usize) -> Result<Self> {
         let src_path = src.as_ref().to_path_buf();
-        let mut zip = ZipArchive::new(File::open(&src_path)?)?;
+        let mut zip = zip_crate::ZipArchive::new(File::open(&src_path)?)?;
 
         // Read workbook.xml to get sheet information
         let mut wb = zip
@@ -968,16 +973,16 @@ impl XlsxEditor {
         let src = self.src_path.clone();
 
         // 1) читаем исходный архив
-        let mut zin = ZipArchive::new(File::open(src)?)?;
+        let mut zin = zip_crate::ZipArchive::new(File::open(src)?)?;
 
         // 2) создаём записыватель *сразу* в конечный файл (или во временный — без разницы)
         let fout = File::create(dst)?;
-        let mut zout = ZipWriter::new(fout);
+        let mut zout = zip_crate::ZipWriter::new(fout);
 
         // 3) общие опции для новых файлов
-        let opt: FileOptions<'_, ()> = FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated) // можно сбросить уровень позже
-            .compression_level(Some(3)); // Deflate level 3 ≈ в 2‑3 раза быстрее
+        let opt: zip_crate::write::FileOptions<'_, ()> = zip_crate::write::FileOptions::default()
+            .compression_method(zip_crate::CompressionMethod::Deflated) // можно сбросить уровень позже
+            .compression_level(Some(1)); // Deflate level 3 ≈ в 2‑3 раза быстрее
 
         for i in 0..zin.len() {
             // ➜ читаем item *без* распаковки
@@ -1005,15 +1010,16 @@ impl XlsxEditor {
         sheet_path: &str,
         new_xml: &[u8],
     ) -> anyhow::Result<()> {
-        let mut zin = ZipArchive::new(File::open(src)?)?;
+        let mut zin = zip_crate::ZipArchive::new(File::open(src)?)?;
 
         // 1) Буфер‑growable в RAM
         let mut mem = Vec::with_capacity(10 * 1024 * 1024); // грубая оценка, чтобы меньше realloc
         {
             let cursor = Cursor::new(&mut mem);
-            let mut zout = ZipWriter::new(cursor);
-            let opt: FileOptions<'_, ()> =
-                FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            let mut zout = zip_crate::ZipWriter::new(cursor);
+            let opt: zip_crate::write::FileOptions<'_, ()> =
+                zip_crate::write::FileOptions::default()
+                    .compression_method(zip_crate::CompressionMethod::Deflated);
 
             for i in 0..zin.len() {
                 let file = zin.by_index_raw(i)?;
@@ -1035,7 +1041,7 @@ impl XlsxEditor {
 }
 
 pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
-    let mut zip = ZipArchive::new(File::open(src)?)?;
+    let mut zip = zip_crate::ZipArchive::new(File::open(src)?)?;
     let mut wb = zip
         .by_name("xl/workbook.xml")
         .context("workbook.xml not found")?;
