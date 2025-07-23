@@ -27,10 +27,14 @@ impl PyXlsxEditor {
         Ok(PyXlsxEditor { editor: openned })
     }
     #[pyo3(signature = (sheet_name))]
-    fn add_worksheet(&mut self, sheet_name: &str) -> PyResult<()> {
-        self.editor
+    fn add_worksheet<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        sheet_name: &str,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.editor
             .add_worksheet(sheet_name)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(slf)
     }
     fn append_row(&mut self, cells: Vec<String>) -> PyResult<()> {
         self.editor
@@ -101,7 +105,10 @@ impl PyXlsxEditor {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(slf)
     }
-    fn merge_cells<'py>(mut slf: PyRefMut<'py, Self>, range: &str) -> PyResult<PyRefMut<'py, Self>> {
+    fn merge_cells<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        range: &str,
+    ) -> PyResult<PyRefMut<'py, Self>> {
         slf.editor
             .merge_cells(range)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
