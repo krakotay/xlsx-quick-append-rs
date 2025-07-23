@@ -1,6 +1,6 @@
 # Project overview
 
-`xlsx-quick-append-rs` is organised as a Cargo workspace containing two crates:
+`excelsior` is organised as a Cargo workspace containing two crates:
 
 - `rust-core` implements the logic for editing XLSX files. It works at the XML
   level inside the ZIP archive without requiring heavy dependencies.

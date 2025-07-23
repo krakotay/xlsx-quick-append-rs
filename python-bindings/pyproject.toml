@@ -17,7 +17,7 @@ classifiers = [
     "License :: OSI Approved :: GPL-3.0 License",
     "Operating System :: OS Independent",
 ]
-urls = { Homepage = "https://github.com/krakotay/xlsx-quick-append-rs", Issues = "https://github.com/krakotay/xlsx-quick-append-rs/issues" }
+urls = { Homepage = "https://github.com/krakotay/excelsior", Issues = "https://github.com/krakotay/excelsior/issues" }
 dependencies = [
     "pyarrow>=20"        # или без версии: "pyarrow"
 ]

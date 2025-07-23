@@ -1,7 +1,7 @@
 [package]
 name = "excelsior"
-version = "0.5.0"
-edition = "2021"
+version.workspace  = true   # брать из [workspace.package]
+edition.workspace  = true   # брать из [workspace.package]
 
 [lib]
 name = "excelsior"

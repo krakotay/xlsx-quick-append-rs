@@ -1,16 +1,9 @@
 set shell := ["pwsh.exe", "-c"]
 
-python-build:
-    python-bindings\.venv\Scripts\activate 
-    cd python-bindings && maturin build  --release
+build POLARS="":
+    python-bindings\.venv\Scripts\activate
+    cd python-bindings && maturin build --release {{POLARS}}
 
-python-build-polars:
-    python-bindings\.venv\Scripts\activate 
-    cd python-bindings && maturin build  -F polars --release
-
-python-develop:
-    python-bindings\.venv\Scripts\activate 
-    cd python-bindings && maturin develop  --release
-python-develop-polars:
-    python-bindings\.venv\Scripts\activate 
-    cd python-bindings && maturin develop  --release  -F polars
+dev POLARS="":
+    python-bindings\.venv\Scripts\activate
+    cd python-bindings && maturin develop --release {{POLARS}}

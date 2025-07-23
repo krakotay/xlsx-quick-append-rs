@@ -1,6 +1,6 @@
 # Usage Guide
 
-This document describes how to use the `xlsx-quick-append-rs` project.
+This document describes how to use the `excelsior` project.
 
 ## Rust library
 
