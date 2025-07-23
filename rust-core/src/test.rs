@@ -53,19 +53,19 @@ fn test_get_last_roww_index() -> Result<()> {
 #[test]
 fn add_new_worksheet() -> Result<()> {
     let file_name = "../test/test_new_ws.xlsx"; // fixed
-    let mut app = XlsxEditor::open(file_name, &scan(file_name)?[0])?;
     let new_file_name = "../test/test_new_ws_out.xlsx";
+
+    let mut app = XlsxEditor::open(file_name, &scan(file_name)?[0])?;
     app.append_table_at("A1", [["Name", "Score", "Status", "Number"]])?;
+    app.add_worksheet("NewSheet")?.set_cell("A1", "123")?;
+    app.add_worksheet("NewSheet2")?
+        .append_table_at("A1", [["Name", "Score", "Status", "Number"]])?;
     app.save(new_file_name)?;
-
-    let mut app = XlsxEditor::open(new_file_name, &scan(new_file_name)?[0])?;
-
-    app.add_worksheet("NewSheet")?;
-    app.add_worksheet("NewSheetTwo")?;
     let sheet_names: Vec<String> = scan(new_file_name)?;
+
     println!("Sheet names: {:#?}", sheet_names);
     assert!(sheet_names.contains(&"NewSheet".to_owned()));
-    assert!(sheet_names.contains(&"NewSheetTwo".to_owned()));
+    assert!(sheet_names.contains(&"NewSheet2".to_owned()));
     Ok(())
 }
 

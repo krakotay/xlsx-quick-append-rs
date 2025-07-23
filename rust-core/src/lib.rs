@@ -13,7 +13,7 @@ use std::{
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
 };
-use tempfile::NamedTempFile;
+// use tempfile::NamedTempFile;
 // use zip::{ZipArchive, ZipWriter, write::FileOptions};
 use ::zip as zip_crate;
 
@@ -37,7 +37,10 @@ pub struct XlsxEditor {
     sheet_path: String,
     sheet_xml: Vec<u8>,
     last_row: u32,
-    styles_xml: Vec<u8>, // ← новое поле
+    styles_xml: Vec<u8>, // содержимое styles.xml
+    workbook_xml: Vec<u8>, // содержимое workbook.xml (может изменяться)
+    rels_xml: Vec<u8>,     // содержимое workbook.xml.rels
+    new_files: Vec<(String, Vec<u8>)>, // новые или изменённые файлы для записи при save()
 }
 
 /// Work with files
@@ -71,6 +74,26 @@ impl XlsxEditor {
             buf
         };
 
+        // ── workbook.xml ───────────────────────────────────────────────
+        let workbook_xml: Vec<u8> = {
+            let mut wb = zip
+                .by_name("xl/workbook.xml")
+                .context("xl/workbook.xml not found")?;
+            let mut buf = Vec::with_capacity(wb.size() as usize);
+            wb.read_to_end(&mut buf)?;
+            buf
+        };
+
+        // ── workbook.xml.rels ──────────────────────────────────────────
+        let rels_xml: Vec<u8> = {
+            let mut rels = zip
+                .by_name("xl/_rels/workbook.xml.rels")
+                .context("xl/_rels/workbook.xml.rels not found")?;
+            let mut buf = Vec::with_capacity(rels.size() as usize);
+            rels.read_to_end(&mut buf)?;
+            buf
+        };
+
         // ── вычисляем last_row ───────────────────────────────────────
         let mut reader = Reader::from_reader(sheet_xml.as_slice());
         // check_utf8(&mut reader)?;
@@ -97,7 +120,10 @@ impl XlsxEditor {
             sheet_path,
             sheet_xml,
             last_row,
-            styles_xml, // ← сохраняем
+            styles_xml,
+            workbook_xml,
+            rels_xml,
+            new_files: Vec::new(),
         })
     }
     /// Saves the modified XLSX file to a specified destination or overwrites the source file.
@@ -118,11 +144,30 @@ impl XlsxEditor {
             .compression_method(zip_crate::CompressionMethod::Deflated)
             .compression_level(Some(1));
 
+        use std::collections::HashSet;
+        let mut written: HashSet<String> = HashSet::new();
+
         for i in 0..zin.len() {
             let file = zin.by_index_raw(i)?;
             let name = file.name();
 
+            if let Some((_, content)) = self.new_files.iter().find(|(p, _)| p == name) {
+                // файл был создан/изменён в памяти – записываем его
+                zout.start_file(name, opt)?;
+                zout.write_all(content)?;
+                written.insert(name.to_string());
+                continue;
+            }
+
             match name {
+                "xl/workbook.xml" => {
+                    zout.start_file(name, opt)?;
+                    zout.write_all(&self.workbook_xml)?;
+                }
+                "xl/_rels/workbook.xml.rels" => {
+                    zout.start_file(name, opt)?;
+                    zout.write_all(&self.rels_xml)?;
+                }
                 _ if name == self.sheet_path => {
                     zout.start_file(name, opt)?;
                     zout.write_all(&self.sheet_xml)?;
@@ -135,13 +180,25 @@ impl XlsxEditor {
             }
         }
 
+        // добавляем файлы, которые ещё не были записаны
+        for (path, content) in &self.new_files {
+            if !written.contains(path) {
+                zout.start_file(path, opt)?;
+                if path == &self.sheet_path {
+                    zout.write_all(&self.sheet_xml)?;
+                } else {
+                    zout.write_all(content)?;
+                }
+                written.insert(path.clone());
+            }
+        }
+
         zout.finish()?;
         Ok(())
     }
     /// Добавляет новый пустой лист с именем `sheet_name`
     /// (он станет первым во вкладках).
-    /// Если `new_path` не указан, то будет использован текущий файл.
-    pub fn add_worksheet(&mut self, sheet_name: &str) -> Result<()> {
+    pub fn add_worksheet(&mut self, sheet_name: &str) -> Result<&mut Self> {
         // 1) читаем исходный архив
         let sheet_names = scan(&self.src_path)?;
         if sheet_names.contains(&sheet_name.to_owned()) {
@@ -149,21 +206,9 @@ impl XlsxEditor {
         }
         let mut zin = zip_crate::ZipArchive::new(File::open(&self.src_path)?)?;
 
-        // ── workbook.xml
-        let mut wb = zin
-            .by_name("xl/workbook.xml")
-            .context("xl/workbook.xml not found")?;
-        let mut wb_xml = Vec::with_capacity(wb.size() as usize);
-        wb.read_to_end(&mut wb_xml)?;
-        drop(wb);
-
-        // ── workbook.xml.rels
-        let mut rels = zin
-            .by_name("xl/_rels/workbook.xml.rels")
-            .context("xl/_rels/workbook.xml.rels not found")?;
-        let mut rels_xml = Vec::with_capacity(rels.size() as usize);
-        rels.read_to_end(&mut rels_xml)?;
-        drop(rels);
+        // ── workbook.xml и workbook.xml.rels берем из текущего состояния, а не читаем заново
+        let mut wb_xml = self.workbook_xml.clone();
+        let mut rels_xml = self.rels_xml.clone();
 
         // 2) определяем свободные sheetId / rId / sheet#.xml
         let mut max_sheet_id = 0u32;
@@ -220,6 +265,15 @@ impl XlsxEditor {
                 max_sheet_file = max_sheet_file.max(n);
             }
         }
+        // также учитываем ещё не сохранённые новые файлы
+        for (path, _) in &self.new_files {
+            if let Some(n) = path.strip_prefix("xl/worksheets/sheet")
+                .and_then(|s| s.strip_suffix(".xml"))
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                max_sheet_file = max_sheet_file.max(n);
+            }
+        }
         let new_sheet_file = max_sheet_file + 1;
         let new_sheet_path = format!("xl/worksheets/sheet{new}.xml", new = new_sheet_file);
         let new_sheet_target = format!("worksheets/sheet{new}.xml", new = new_sheet_file);
@@ -262,45 +316,37 @@ impl XlsxEditor {
           <sheetData> </sheetData>
         </worksheet>"#;
 
-        // 7) собираем новый ZIP
-        let tmp = NamedTempFile::new()?;
+        
+        // обновляем внутреннее состояние
+        self.workbook_xml = wb_xml;
+        self.rels_xml = rels_xml;
+        if let Some(pair) = self
+            .new_files
+            .iter_mut()
+            .find(|(p, _)| p == &new_sheet_path)
         {
-            let mut zout = zip_crate::ZipWriter::new(&tmp);
-            let opt: zip_crate::write::FileOptions<'_, ()> =
-                zip_crate::write::FileOptions::default()
-                    .compression_method(zip_crate::CompressionMethod::Deflated)
-                    .compression_level(Some(3));
-
-            for i in 0..zin.len() {
-                let file = zin.by_index_raw(i)?;
-                let name = file.name();
-                match name {
-                    "xl/workbook.xml" => {
-                        zout.start_file(name, opt)?;
-                        zout.write_all(&wb_xml)?;
-                    }
-                    "xl/_rels/workbook.xml.rels" => {
-                        zout.start_file(name, opt)?;
-                        zout.write_all(&rels_xml)?;
-                    }
-                    path if path == self.sheet_path => {
-                        // вшиваем уже изменённый текущий лист
-                        zout.start_file(path, opt)?;
-                        zout.write_all(&self.sheet_xml)?;
-                    }
-                    _ => {
-                        zout.raw_copy_file(file)?;
-                    }
-                }
-            }
-            // добавляем новый лист
-            zout.start_file(&new_sheet_path, opt)?;
-            zout.write_all(EMPTY_SHEET.as_bytes())?;
-            zout.finish()?;
+            pair.1 = EMPTY_SHEET.as_bytes().to_vec();
+        } else {
+            self
+                .new_files
+                .push((new_sheet_path.clone(), EMPTY_SHEET.as_bytes().to_vec()));
         }
-        std::fs::rename(tmp.path(), &self.src_path)?;
 
-        Ok(())
+        // перед переключением сохраняем изменённый текущий лист
+        let cur_path = self.sheet_path.clone();
+        let cur_xml = self.sheet_xml.clone();
+        if let Some(pair) = self.new_files.iter_mut().find(|(p, _)| p == &cur_path) {
+            pair.1 = cur_xml;
+        } else {
+            self.new_files.push((cur_path, cur_xml));
+        }
+
+        // переключаем редактор на новый лист
+        self.sheet_path = new_sheet_path;
+        self.sheet_xml = EMPTY_SHEET.as_bytes().to_vec();
+        self.last_row = 0;
+
+        Ok(self)
     }
 }
 
