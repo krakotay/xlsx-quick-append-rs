@@ -148,7 +148,7 @@ impl PyXlsxScanner {
 }
 
 #[pymodule]
-fn xlsx_append_py(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn excelsior(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyXlsxEditor>()?;
     m.add_class::<PyXlsxScanner>()?;
     m.add_function(wrap_pyfunction!(scan_excel, m)?)?;

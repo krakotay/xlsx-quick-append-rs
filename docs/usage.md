@@ -42,12 +42,12 @@ editor.save("output.xlsx")?;
 ## Python bindings
 
 Bindings are provided in the `python-bindings` crate. After building with
-`maturin`, the package `xlsx_append_py` offers an interface similar to the
+`maturin`, the package `excelsior` offers an interface similar to the
 Rust API.
 
 Example:
 ```python
-from xlsx_append_py import scan_excel, PyXlsxEditor
+from excelsior import scan_excel, PyXlsxEditor
 
 sheets = scan_excel("tests/test_sum.xlsx")
 editor = PyXlsxEditor("tests/test_sum.xlsx", sheets[0])

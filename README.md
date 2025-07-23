@@ -1,6 +1,6 @@
-# xlsx-quick-append-rs
-[![Rust](https://github.com/krakotay/xlsx-quick-append-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/krakotay/xlsx-quick-append-rs/actions/workflows/rust.yml)
-[![Build maturin wheels](https://github.com/krakotay/xlsx-quick-append-rs/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/krakotay/xlsx-quick-append-rs/actions/workflows/release.yml)
+# excelsior
+[![Rust](https://github.com/krakotay/excelsior/actions/workflows/rust.yml/badge.svg)](https://github.com/krakotay/excelsior/actions/workflows/rust.yml)
+[![Build maturin wheels](https://github.com/krakotay/excelsior/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/krakotay/excelsior/actions/workflows/release.yml)
 
 A small project for quickly updating `.xlsx` workbooks from Rust or Python.
 It consists of two crates:

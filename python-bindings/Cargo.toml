@@ -1,10 +1,10 @@
 [package]
-name = "xlsx_append_py"
+name = "excelsior"
 version = "0.4.2"
 edition = "2021"
 
 [lib]
-name = "xlsx_append_py"
+name = "excelsior"
 crate-type = ["cdylib"]
 
 [dependencies]

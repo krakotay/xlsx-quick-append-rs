@@ -1,4 +1,4 @@
-from xlsx_append_py import scan_excel, PyXlsxEditor
+from excelsior import scan_excel, PyXlsxEditor
 import os
 base_dir = os.path.dirname(os.path.abspath(__file__))
 assert scan_excel(os.path.join(base_dir, "../../test/test_sum.xlsx")) == ["Sheet1"]

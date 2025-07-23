@@ -1,4 +1,4 @@
-from xlsx_append_py import PyXlsxScanner
+from excelsior import PyXlsxScanner
 import os
 base_dir = os.path.dirname(os.path.abspath(__file__))
 inp_filename = os.path.join(base_dir, "../../test/style_test.xlsx")

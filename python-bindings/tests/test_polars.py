@@ -1,4 +1,4 @@
-from xlsx_append_py import PyXlsxScanner
+from excelsior import PyXlsxScanner
 import polars as pl
 import os
 import tempfile

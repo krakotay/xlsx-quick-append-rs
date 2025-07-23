@@ -3,7 +3,7 @@ requires = ["maturin>=1.9"]
 build-backend = "maturin"
 
 [project]
-name = "xlsx_append_py"
+name = "excelsior"
 dynamic = ["version"]
 description = "Blazingly fast append to xlsx file"
 readme = { file = "../README.md", content-type = "text/markdown" }

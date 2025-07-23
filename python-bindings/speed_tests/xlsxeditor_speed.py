@@ -1,4 +1,4 @@
-from xlsx_append_py import PyXlsxEditor
+from excelsior import PyXlsxEditor
 import os
 base_dir = os.path.dirname(os.path.abspath(__file__))
 

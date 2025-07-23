@@ -545,6 +545,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "excelsior"
+version = "0.4.2"
+dependencies = [
+ "anyhow",
+ "pyo3",
+ "pyo3-polars",
+ "rust-core",
+]
+
+[[package]]
 name = "fallible-streaming-iterator"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3429,16 +3439,6 @@ name = "writeable"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea2f10b9bb0928dfb1b42b65e1f9e36f7f54dbdf08457afefb38afcdec4fa2bb"
-
-[[package]]
-name = "xlsx_append_py"
-version = "0.4.2"
-dependencies = [
- "anyhow",
- "pyo3",
- "pyo3-polars",
- "rust-core",
-]
 
 [[package]]
 name = "xxhash-rust"
