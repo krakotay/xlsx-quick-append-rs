@@ -112,6 +112,27 @@ fn set_column_number_format() -> Result<()> {
     xl.save(file_name_out)?;
     Ok(())
 }
+#[test]
+fn set_border() -> Result<()> {
+    let file_name = "../test/style_test.xlsx";
+    let file_name_out = "../test/style_test_out_borders.xlsx";
+
+    let mut xl: XlsxEditor = XlsxEditor::open(file_name, "Sheet1")?;
+    xl.set_border("A2:C3", "thin")?
+        .set_fill("A2:C3", "FFCCCC")?
+        .set_font("A2:C3", "Arial", 12.0, true, false)?
+        .merge_cells("A3:C3")?;
+
+    // xl.set_fill("B14:B18", "FFFF00")?
+    //     .set_font("D4:D8", "Arial", 12.0, true, false)?
+    //     .set_fill("E4:E8", "FFCCCC")?
+    //     .set_font("A1:C3", "Calibri", 10.0, false, true)?
+    //     .set_fill("A1:C3", "FFFF00")?
+    //     .merge_cells("B12:D12")?;
+
+    xl.save(file_name_out)?;
+    Ok(())
+}
 
 #[cfg(test)]
 #[cfg(feature = "polars")]

@@ -2,7 +2,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use pyo3::PyRefMut;
-use rust_core::{scan, XlsxEditor};
+use rust_core::{XlsxEditor, scan};
 use std::path::PathBuf;
 
 #[cfg(feature = "polars")]
@@ -36,6 +36,7 @@ impl PyXlsxEditor {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(slf)
     }
+
     fn append_row(&mut self, cells: Vec<String>) -> PyResult<()> {
         self.editor
             .append_row(cells)
@@ -114,18 +115,16 @@ impl PyXlsxEditor {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(slf)
     }
-
-    // set_font
-    // fn set_number_format(&mut self, range: &str, fmt: &str) -> PyResult<()> {
-    //     self.editor
-    //         .set_number_format(range, fmt)
-    //         .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-    // }
-    // fn set_number_format(&mut self, range: &str, fmt: &str) -> PyResult<()> {
-    //     self.editor
-    //         .set_number_format(range, fmt)
-    //         .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-    // }
+    fn set_border<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        range: &str,
+        style: &str,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.editor
+            .set_border(range, style)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(slf)
+    }
 }
 #[pyclass]
 struct PyXlsxScanner {

@@ -6,7 +6,10 @@ static GLOBAL: MiMalloc = MiMalloc;
 mod test;
 
 use anyhow::{Context, Result, bail};
-use quick_xml::{Reader, Writer, events::Event};
+use quick_xml::{
+    Reader, Writer,
+    events::{BytesText, Event},
+};
 use regex::Regex;
 use std::{
     fs::File,
@@ -17,19 +20,6 @@ use std::{
 // use zip::{ZipArchive, ZipWriter, write::FileOptions};
 use ::zip as zip_crate;
 
-#[cfg(feature = "polars")]
-use polars_core::prelude::*;
-
-// fn check_utf8<R: std::io::BufRead>(reader: &mut Reader<R>) -> Result<()> {
-//     // Reader уже посмотрел декларацию `<?xml ... encoding="..."?>`
-//     // и выбрал нужный декодер.
-//     let enc = reader.decoder().encoding(); // -> &'static encoding_rs::Encoding
-
-//     if enc.name() != "UTF-8" {
-//         bail!("unsupported XML encoding {}", enc.name());
-//     }
-//     Ok(())
-// }
 /// `XlsxEditor` provides functionality to open, modify, and save XLSX files.
 /// It allows appending rows and tables to a specified sheet within an XLSX file.
 pub struct XlsxEditor {
@@ -37,9 +27,9 @@ pub struct XlsxEditor {
     sheet_path: String,
     sheet_xml: Vec<u8>,
     last_row: u32,
-    styles_xml: Vec<u8>, // содержимое styles.xml
-    workbook_xml: Vec<u8>, // содержимое workbook.xml (может изменяться)
-    rels_xml: Vec<u8>,     // содержимое workbook.xml.rels
+    styles_xml: Vec<u8>,               // содержимое styles.xml
+    workbook_xml: Vec<u8>,             // содержимое workbook.xml (может изменяться)
+    rels_xml: Vec<u8>,                 // содержимое workbook.xml.rels
     new_files: Vec<(String, Vec<u8>)>, // новые или изменённые файлы для записи при save()
 }
 
@@ -267,7 +257,8 @@ impl XlsxEditor {
         }
         // также учитываем ещё не сохранённые новые файлы
         for (path, _) in &self.new_files {
-            if let Some(n) = path.strip_prefix("xl/worksheets/sheet")
+            if let Some(n) = path
+                .strip_prefix("xl/worksheets/sheet")
                 .and_then(|s| s.strip_suffix(".xml"))
                 .and_then(|s| s.parse::<usize>().ok())
             {
@@ -316,7 +307,6 @@ impl XlsxEditor {
           <sheetData> </sheetData>
         </worksheet>"#;
 
-        
         // обновляем внутреннее состояние
         self.workbook_xml = wb_xml;
         self.rels_xml = rels_xml;
@@ -327,8 +317,7 @@ impl XlsxEditor {
         {
             pair.1 = EMPTY_SHEET.as_bytes().to_vec();
         } else {
-            self
-                .new_files
+            self.new_files
                 .push((new_sheet_path.clone(), EMPTY_SHEET.as_bytes().to_vec()));
         }
 
@@ -351,51 +340,178 @@ impl XlsxEditor {
 }
 
 /// Polars
+#[cfg(feature = "polars")]
+use polars_core::prelude::*;
 
 impl XlsxEditor {
-    /// Overwrites the specified `sheet_name` with the provided Polars `DataFrame`.
-    ///
-    /// The function opens the workbook, completely clears any existing data inside the
-    /// sheet, then writes the column names followed by the DataFrame's rows.  Writing
-    /// starts from the coordinate provided in `start_cell` or "A1" when `None`.
-    ///
-    /// Note: The workbook on disk is **overwritten**. If you need to keep the original
     #[cfg(feature = "polars")]
     pub fn with_polars(&mut self, df: &DataFrame, start_cell: Option<&str>) -> Result<()> {
-        // Remove existing data so that the DataFrame overwrites the sheet.
-        // self.clear_sheet()?;
+        // ---------- 0.  Координаты диапазона, который будем затирать ----------
+        let start_coord = start_cell.unwrap_or("A1");
+        let (base_col, first_row) = {
+            let split = start_coord.find(|c: char| c.is_ascii_digit()).unwrap();
+            (
+                split_coord(&start_coord[..]),
+                start_coord[split..].parse::<u32>().unwrap(),
+            )
+        };
+        let last_row = first_row + df.height() as u32 - 1;
 
-        // Helper – convert the entire DataFrame into Vec<Vec<String>> where the first
-        // row contains column headers.
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(df.height() + 1);
-        // 1. Header row.
-        rows.push(
-            df.get_columns()
-                .iter()
-                .map(|s| s.name().to_string())
-                .collect(),
-        );
-        // 2. Data rows.
-        for row_idx in 0..df.height() {
-            let mut row = Vec::with_capacity(df.width());
-            for series in df.get_columns() {
-                let cell_val = series
-                    .get(row_idx)
-                    .map(|v| v.to_string())
-                    .unwrap_or_default();
-                row.push(cell_val.replace("\"", ""));
+        // ---------- 0‑bis.  Удаляем старые <row …> в нужном диапазоне ----------
+        // ищем шаблон <row r="N" ...> … </row>
+        // NB: линейный поиск по Vec<u8> дешевле, чем парсить всё XML quick‑xml‑ом
+        let mut i = 0;
+        while let Some(beg) = self.sheet_xml[i..]
+            .windows(5)
+            .position(|w| w == b"<row ")
+            .map(|p| p + i)
+        {
+            // поиск атрибут r="..."
+            if let Some(r_attr_pos) = self.sheet_xml[beg..]
+                .windows(3)
+                .position(|w| w == b"r=\"")
+                .map(|p| p + beg + 3)
+            {
+                if let Some(quote_end) = self.sheet_xml[r_attr_pos..]
+                    .iter()
+                    .position(|&b| b == b'"')
+                    .map(|p| p + r_attr_pos)
+                {
+                    let row_num: u32 = std::str::from_utf8(&self.sheet_xml[r_attr_pos..quote_end])?
+                        .parse()
+                        .unwrap_or(0);
+
+                    if row_num >= first_row && row_num <= last_row {
+                        // найти конец </row>
+                        if let Some(end_tag) = self.sheet_xml[quote_end..]
+                            .windows(6)
+                            .position(|w| w == b"</row>")
+                            .map(|p| p + quote_end + 6)
+                        {
+                            self.sheet_xml.splice(beg..end_tag, std::iter::empty());
+                            // начинаем заново — буфер изменился
+                            i = 0;
+                            continue;
+                        }
+                    }
+                }
             }
-            rows.push(row);
+            // если не удалили, двигаемся далее
+            i = beg + 5;
         }
 
-        // Determine the starting coordinate.
-        let start_coord = start_cell.unwrap_or("A1");
-        // Write the table and save.
-        self.append_table_at(start_coord, rows)?;
-        Ok(())
+        // ---------- 1.  Метаданные столбцов ----------
+        struct ColMeta {
+            is_number: bool,
+            style_id: Option<u32>,
+            conv: Box<dyn Fn(AnyValue) -> String>,
+        }
+
+        let mut cols = Vec::<ColMeta>::with_capacity(df.width());
+        for s in df.get_columns() {
+            match s.dtype() {
+                // Текст — берём строку без кавычек.
+                DataType::String => cols.push(ColMeta {
+                    is_number: false,
+                    style_id: None,
+                    conv: Box::new(|v| match v {
+                        AnyValue::String(s) => s.to_string(),
+                        _ => {
+                            // на всякий случай, вдруг что‑то ещё пролезет
+                            let mut t = v.to_string();
+                            if t.starts_with('"') && t.ends_with('"') {
+                                t.truncate(t.len() - 1);
+                                t.remove(0);
+                            }
+                            t
+                        }
+                    }),
+                }),
+                // Целые
+                DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64 => cols.push(ColMeta {
+                    is_number: true,
+                    style_id: None,
+                    conv: Box::new(|v| v.to_string()),
+                }),
+                // Float
+                DataType::Float32 | DataType::Float64 => cols.push(ColMeta {
+                    is_number: true,
+                    style_id: None,
+                    conv: Box::new(|v| v.to_string()),
+                }),
+                // Fallback
+                _ => cols.push(ColMeta {
+                    is_number: false,
+                    style_id: None,
+                    conv: Box::new(|v| v.to_string()),
+                }),
+            }
+        }
+
+        // ---------- 2.  Генерируем XML строк ----------
+        let mut bulk_rows_xml = Vec::<u8>::new();
+        let mut cur_row = first_row;
+        for idx in 0..df.height() {
+            let mut w = Writer::new(Vec::new());
+            w.create_element("row")
+                .with_attribute(("r", cur_row.to_string().as_str()))
+                .write_inner_content(|wr| {
+                    for (col_idx, s) in df.get_columns().iter().enumerate() {
+                        let coord =
+                            format!("{}{}", col_letter(base_col.0 + col_idx as u32), cur_row);
+                        let val = s.get(idx).unwrap_or(AnyValue::Null);
+                        let meta = &cols[col_idx];
+
+                        let mut c = wr.create_element("c").with_attribute(("r", coord.as_str()));
+                        if let Some(sid) = meta.style_id {
+                            c = c.with_attribute(("s", sid.to_string().as_str()));
+                        }
+                        if !meta.is_number {
+                            c = c.with_attribute(("t", "inlineStr"));
+                        }
+
+                        c.write_inner_content(|w2| {
+                            let txt = (meta.conv)(val);
+                            if meta.is_number {
+                                w2.create_element("v")
+                                    .write_text_content(BytesText::new(&txt))?;
+                            } else {
+                                w2.create_element("is").write_inner_content(|w3| {
+                                    w3.create_element("t")
+                                        .write_text_content(BytesText::new(&txt))?;
+                                    Ok(())
+                                })?;
+                            }
+                            Ok(())
+                        })?;
+                    }
+                    Ok(())
+                })?;
+            bulk_rows_xml.extend_from_slice(&w.into_inner());
+            cur_row += 1;
+        }
+
+        // ---------- 3.  Вставляем новые строки ----------
+        if let Some(pos) = self
+            .sheet_xml
+            .windows(12)
+            .rposition(|w| w == b"</sheetData>")
+        {
+            self.sheet_xml.splice(pos..pos, bulk_rows_xml);
+            self.last_row = last_row;
+            Ok(())
+        } else {
+            bail!("</sheetData> tag not found");
+        }
     }
 }
-
 /// Testing
 
 impl XlsxEditor {
@@ -983,14 +1099,14 @@ impl XlsxEditor {
 
     /// «Колончный» способ: задаёт формат через `<col … style="…"/>`
     /// (Excel применит стиль даже к будущим ячейкам столбца).
-    pub fn set_column_number_format(&mut self, col_letter: &str, fmt: &str) -> Result<()> {
+    fn set_column_number_format(&mut self, col_letter: &str, fmt: &str) -> Result<()> {
         let style_id = self.ensure_style(Some(fmt), None, None, None)?;
         self.apply_style_to_column(col_index(col_letter) as u32, style_id)
     }
 
     /// Тот же формат, но **насильно** проставляет стиль
     /// всем существующим ячейкам столбца.
-    pub fn force_column_number_format(&mut self, col_letter: &str, fmt: &str) -> Result<()> {
+    fn force_column_number_format(&mut self, col_letter: &str, fmt: &str) -> Result<()> {
         self.set_column_number_format(col_letter, fmt)?;
 
         let style_id = self.ensure_style(Some(fmt), None, None, None)?;
@@ -1072,6 +1188,135 @@ impl XlsxEditor {
             }
         }
         Ok(())
+    }
+    // ---------- BORDER UTILITIES -------------------------------------------
+    /// Ensures a `<border>` definition with the given style exists in `styles.xml`
+    /// and returns its zero-based `borderId`.
+    /// Currently a simple border with the same style is applied to left/right/top/bottom.
+    fn ensure_border(&mut self, style: &str) -> Result<u32> {
+        // 1. Count existing <border> elements and remember count (== next id)
+        use quick_xml::events::Event;
+        use quick_xml::Reader;
+        let mut rdr = Reader::from_reader(self.styles_xml.as_slice());
+        rdr.config_mut().trim_text(true);
+        let mut in_borders = false;
+        let mut cnt: u32 = 0;
+        while let Ok(ev) = rdr.read_event() {
+            match ev {
+                Event::Start(ref e) if e.name().as_ref() == b"borders" => in_borders = true,
+                Event::End(ref e) if e.name().as_ref() == b"borders" => break,
+                Event::Start(ref e) | Event::Empty(ref e) if in_borders && e.name().as_ref() == b"border" => {
+                    cnt += 1;
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        let new_id = cnt; // next id if we add
+
+        // QUICK check: if there is already <border> with exactly same style on all 4 sides, reuse
+        // For simplicity, we skip search and always append – safe but may duplicate borders.
+
+        // 2. Insert new <border> before </borders>
+        let end_pos = find_bytes(&self.styles_xml, b"</borders>")
+            .context("styles.xml: </borders> not found")?;
+        let tag = format!(
+            r#"<border><left style="{s}"/><right style="{s}"/><top style="{s}"/><bottom style="{s}"/><diagonal/></border>"#,
+            s = style
+        );
+        self.styles_xml.splice(end_pos..end_pos, tag.as_bytes().iter().copied());
+        // 3. bump count attribute
+        bump_count(&mut self.styles_xml, b"<borders", b"count=\"")?;
+
+        Ok(new_id)
+    }
+
+    /// Creates a new `<xf>` that references the provided `border_id` together
+    /// with optional `font_id` / `fill_id`, returning its `styleId`.
+    fn ensure_style_with_border(
+        &mut self,
+        font_id: Option<u32>,
+        fill_id: Option<u32>,
+        border_id: u32,
+    ) -> Result<u32> {
+        // Count existing xfs to determine new id
+        use quick_xml::events::Event;
+        use quick_xml::Reader;
+        let mut rdr = Reader::from_reader(self.styles_xml.as_slice());
+        rdr.config_mut().trim_text(true);
+        let mut in_xfs = false;
+        let mut cnt: u32 = 0;
+        while let Ok(ev) = rdr.read_event() {
+            match ev {
+                Event::Start(ref e) if e.name().as_ref() == b"cellXfs" => in_xfs = true,
+                Event::End(ref e) if e.name().as_ref() == b"cellXfs" => break,
+                Event::Start(ref e) | Event::Empty(ref e) if in_xfs && e.name().as_ref() == b"xf" => cnt += 1,
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        let new_id = cnt;
+
+        // Build xf tag
+        let mut xf = String::from("<xf numFmtId=\"0\" xfId=\"0\" ");
+        if let Some(fid) = font_id {
+            xf += &format!("fontId=\"{}\" applyFont=\"1\" ", fid);
+        }
+        if let Some(fid) = fill_id {
+            xf += &format!("fillId=\"{}\" applyFill=\"1\" ", fid);
+        }
+        xf += &format!("borderId=\"{}\" applyBorder=\"1\"/>", border_id);
+
+        let pos = find_bytes(&self.styles_xml, b"</cellXfs>")
+            .context("styles.xml: </cellXfs> not found")?;
+        self.styles_xml.splice(pos..pos, xf.as_bytes().iter().copied());
+        bump_count(&mut self.styles_xml, b"<cellXfs", b"count=\"")?;
+
+        Ok(new_id)
+    }
+
+    /// Sets the border style (e.g., "thin", "medium", "thick") for the given range.
+    /// Currently applies the same style to all four sides of each cell.
+    pub fn set_border(&mut self, range: &str, style: &str) -> Result<&mut Self> {
+        let border_id = self.ensure_border(style)?;
+        // We'll NOT change existing font / fill attributes of cells.
+        match parse_target(range)? {
+            Target::Cell(c) => {
+                // Preserve old font/fill if any
+                let old_sid = self.cell_style_id(&c)?;
+                let (old_font, old_fill) = if let Some(s) = old_sid {
+                    self.xf_components(s)?
+                } else {
+                    (None, None)
+                };
+                let sid = self.ensure_style_with_border(old_font, old_fill, border_id)?;
+                self.apply_style_to_cell(&c, sid)?;
+            }
+            Target::Row(r) => {
+                let sid = self.ensure_style_with_border(None, None, border_id)?;
+                self.apply_style_to_row(r, sid)?;
+            }
+            Target::Col(c) => {
+                let sid = self.ensure_style_with_border(None, None, border_id)?;
+                self.apply_style_to_column(c, sid)?;
+            }
+            Target::Rect { c0, r0, c1, r1 } => {
+                for rr in r0..=r1 {
+                    for cc in c0..=c1 {
+                        let coord = format!("{}{}", col_letter(cc), rr);
+                        let old_sid = self.cell_style_id(&coord)?;
+                        let (old_font, old_fill) = if let Some(s) = old_sid {
+                            self.xf_components(s)?
+                        } else {
+                            (None, None)
+                        };
+                        let sid = self.ensure_style_with_border(old_font, old_fill, border_id)?;
+                        self.apply_style_to_cell(&coord, sid)?;
+                    }
+                }
+            }
+        }
+        Ok(self)
     }
 }
 
@@ -1740,31 +1985,6 @@ impl XlsxEditor {
         self._merge_and_apply(range, |font, _old_fill| (font, Some(new_fill)))?;
         Ok(self)
     }
-
-    // // ------------------------------------------------------------------
-    // // Вспомогательный приватный метод: применить styleId к любому Target
-    // // ------------------------------------------------------------------
-    // fn apply_style_range(&mut self, range: &str, style_id: u32) -> Result<()> {
-    //     match parse_target(range)? {
-    //         Target::Cell(c) => self.apply_style_to_cell(&c, style_id)?,
-    //         Target::Rect { c0, r0, c1, r1 } => {
-    //             for r in r0..=r1 {
-    //                 for c in c0..=c1 {
-    //                     let coord = format!("{}{}", col_letter(c), r);
-    //                     self.apply_style_to_cell(&coord, style_id)?;
-    //                 }
-    //             }
-    //         }
-    //         Target::Col(col) => self.apply_style_to_column(col, style_id)?,
-    //         Target::Row(row) => self.apply_style_to_row(row, style_id)?,
-    //     }
-    //     Ok(())
-    // }
-
-    // ────────────────────────────────────────────────────────────
-    // ↓↓↓ ВНУТРЕННЕЕ — «слить» старый и новый атрибуты и выдать xf
-    // ────────────────────────────────────────────────────────────
-
     /// Из существующего styleId достаём (fontId, fillId).
     fn xf_components(&self, style_id: u32) -> Result<(Option<u32>, Option<u32>)> {
         let mut rdr = Reader::from_reader(self.styles_xml.as_slice());
@@ -1802,6 +2022,38 @@ impl XlsxEditor {
         }
         // если не нашли (ячейка без s или out‑of‑range) → None
         Ok((None, None))
+    }
+
+    /// Extracts `borderId` from an existing `xf` style.
+    /// Returns `None` if the style does not specify a border.
+    fn xf_border(&self, style_id: u32) -> Result<Option<u32>> {
+        use quick_xml::events::Event;
+        use quick_xml::Reader;
+        let mut rdr = Reader::from_reader(self.styles_xml.as_slice());
+        rdr.config_mut().trim_text(true);
+        let mut in_xfs = false;
+        let mut idx = 0u32;
+        while let Ok(ev) = rdr.read_event() {
+            match ev {
+                Event::Start(ref e) if e.name().as_ref() == b"cellXfs" => in_xfs = true,
+                Event::End(ref e) if e.name().as_ref() == b"cellXfs" => break,
+                Event::Start(ref e) | Event::Empty(ref e) if in_xfs && e.name().as_ref() == b"xf" => {
+                    if idx == style_id {
+                        for a in e.attributes().with_checks(false).flatten() {
+                            if a.key.as_ref() == b"borderId" {
+                                let val: u32 = String::from_utf8_lossy(&a.value).parse()?;
+                                return Ok(Some(val));
+                            }
+                        }
+                        return Ok(None);
+                    }
+                    idx += 1;
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        Ok(None)
     }
 
     /// Применяет к диапазону style, «сливая» его с тем, что уже есть.
@@ -1853,7 +2105,17 @@ impl XlsxEditor {
         };
 
         let (new_font, new_fill) = f(old_font, old_fill);
-        let new_sid = self.ensure_style(None, new_font, new_fill, None)?;
+        // Preserve existing border if present
+        let old_border = if let Some(sid) = old_sid {
+            self.xf_border(sid)?
+        } else {
+            None
+        };
+        let new_sid = if let Some(border_id) = old_border {
+            self.ensure_style_with_border(new_font, new_fill, border_id)?
+        } else {
+            self.ensure_style(None, new_font, new_fill, None)?
+        };
 
         self.apply_style_to_cell(coord, new_sid)
     }

@@ -22,4 +22,6 @@ zip         = { version = "4.3.0", default-features = false, features = ["deflat
 
 [features]
 default = []
+# default = ["polars-core"]
+
 polars = ["polars-core"]

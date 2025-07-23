@@ -4,6 +4,6 @@
 members = ["rust-core", "python-bindings"]
 
 [workspace.package]
-version  = "0.5.0"
+version  = "0.6.0-alpha"
 edition  = "2024"
 license  = "GPL-3.0"

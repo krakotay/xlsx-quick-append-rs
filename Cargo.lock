@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "excelsior"
-version = "0.5.0"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "pyo3",
@@ -2355,7 +2355,7 @@ dependencies = [
 
 [[package]]
 name = "rust-core"
-version = "0.5.0"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "mimalloc",
