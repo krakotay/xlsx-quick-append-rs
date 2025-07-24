@@ -2357,12 +2357,12 @@ dependencies = [
 name = "rust-core"
 version = "0.5.0"
 dependencies = [
- "anyhow",
  "mimalloc",
  "polars-core",
  "quick-xml 0.38.0",
  "regex",
  "tempfile",
+ "thiserror 1.0.69",
  "zip",
 ]
 
