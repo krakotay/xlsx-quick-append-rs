@@ -1,7 +1,5 @@
 #[cfg(test)]
-use crate::{XlsxEditor, scan};
-#[cfg(test)]
-use anyhow::Result;
+use crate::{XlsxEditor, scan, Result};
 #[test]
 #[cfg(test)]
 fn test_insert_table_at() -> Result<()> {
