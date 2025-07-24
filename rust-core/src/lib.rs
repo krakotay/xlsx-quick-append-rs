@@ -1511,9 +1511,9 @@ impl XlsxEditor {
         // Extract row number from coordinate.
         let row_start = coord
             .find(|c: char| c.is_ascii_digit())
-            .ok_or_else(|| XlsxError::InvalidCoordinate { 
-                coord: "no digits found".to_string() 
-            })?;
+            .ok_or_else(|| XlsxError::InvalidCoordinate {
+                coord: coord.to_string()
+            })?
         let row_num: u32 = coord[row_start..]
             .parse()
             .map_err(|_| XlsxError::InvalidCoordinate { 
