@@ -17,6 +17,7 @@ out_filename = os.path.join(base_dir, "../../test/test_polars_appended.xlsx")
 
 scanner = PyXlsxScanner(inp_filename)
 editor = scanner.open_editor(scanner.get_sheets()[0])
-editor.with_polars(df)
+# editor.with_polars(df, "A1")
 editor.add_worksheet('polars_ws').with_polars(df, "B4")
+editor.add_worksheet('polars_ws_2').with_polars(df)
 editor.save(out_filename)

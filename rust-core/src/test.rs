@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::{XlsxEditor, scan};
+use crate::{style::{AlignSpec, HorizAlignment, VertAlignment}, XlsxEditor, scan};
 #[cfg(test)]
 use anyhow::Result;
 #[test]
@@ -121,15 +121,87 @@ fn set_border() -> Result<()> {
     xl.set_border("A2:C3", "thin")?
         .set_fill("A2:C3", "FFCCCC")?
         .set_font("A2:C3", "Arial", 12.0, true, false)?
+        .set_alignment(
+            "A2:C3",
+            &AlignSpec {
+                horiz: Some(HorizAlignment::Center),
+
+                vert: Some(VertAlignment::Bottom),
+                wrap: true,
+            },
+        )?
         .merge_cells("A3:C3")?;
+    xl.add_worksheet("Sheet2")?
+        .set_border("A2:C3", "thin")?
+        .set_fill("A2:C3", "FFCCCC")?
+        .set_font("A2:C3", "Arial", 12.0, true, false)?
+        .merge_cells("A3:C3")?;
+    xl.save(file_name_out)?;
+    Ok(())
+}
+#[test]
+fn set_border_big_test() -> Result<()> {
+    let file_name = "Шаблон53. РД Выборка.xlsx";
+    let file_name_out = "Шаблон53. РД Выборка_out.xlsx";
+    let sheets = &scan(file_name)?[0];
+    let mut xl: XlsxEditor = XlsxEditor::open(file_name, sheets)?;
+    xl.add_worksheet("SheetBigSheet")?
+        .set_border("A2:C3", "thin")?
+        .set_fill("A2:C3", "FFCCCC")?
+        .set_font("A2:C3", "Arial", 12.0, true, false)?
+        .set_column_width("A", 40.0)?
+        .set_column_width("B", 40.0)?
+        .set_column_width("C", 40.0)?
+        .set_alignment(
+            "A2:C3",
+            &AlignSpec {
+                horiz: Some(HorizAlignment::Center),
 
-    // xl.set_fill("B14:B18", "FFFF00")?
-    //     .set_font("D4:D8", "Arial", 12.0, true, false)?
-    //     .set_fill("E4:E8", "FFCCCC")?
-    //     .set_font("A1:C3", "Calibri", 10.0, false, true)?
-    //     .set_fill("A1:C3", "FFFF00")?
-    //     .merge_cells("B12:D12")?;
+                vert: Some(VertAlignment::Bottom),
+                wrap: true,
+            },
+        )?
+        .merge_cells("A3:C3")?;
+    xl.save(file_name_out)?;
+    Ok(())
+}
+#[test]
+fn set_border_font_color() -> Result<()> {
+    let file_name = "../test/style_test.xlsx";
+    let file_name_out = "../test/style_test_out_borders_font_color.xlsx";
 
+    let mut xl: XlsxEditor = XlsxEditor::open(file_name, "Sheet1")?;
+    xl.append_table_at("A1", [["1", "2", "3"], ["1", "2", "3"], ["1", "2", "3"]])?;
+
+    xl.set_font("D4:D8", "Arial", 12.0, true, false)?
+        .set_border("A1:C3", "thin")?
+        .set_font_with_alignment(
+            "A1:C3",
+            "Calibri",
+            10.0,
+            false,
+            true,
+            &AlignSpec {
+                horiz: Some(HorizAlignment::Center),
+                vert: None,
+                wrap: true,
+            },
+        )?;
+    xl.add_worksheet("Sheet2")?;
+    xl.append_table_at("A1", [["1", "2", "3"], ["1", "2", "3"], ["1", "2", "3"]])?;
+    xl.set_font_with_alignment(
+        "A1:C3",
+        "Calibri",
+        10.0,
+        false,
+        true,
+        &AlignSpec {
+            horiz: Some(HorizAlignment::Center),
+            vert: None,
+            wrap: true,
+        },
+    )?
+    .set_border("A1:C3", "thin")?;
     xl.save(file_name_out)?;
     Ok(())
 }

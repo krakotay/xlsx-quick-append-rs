@@ -1,6 +1,35 @@
-# type: ignore[list-item]   # <-- пригодится, если MyPy < 1.10
+# type: ignore[list-item]
 from typing import List, Optional
-from polars import DataFrame 
+from polars import DataFrame
+from enum import Enum  # <-- Важно импортировать Enum
+
+# --- НОВЫЕ КЛАССЫ, ВИДИМЫЕ В PYTHON ---
+
+class HorizAlignment(Enum):
+    """Горизонтальное выравнивание."""
+    Left: "HorizAlignment"
+    Center: "HorizAlignment"
+    Right: "HorizAlignment"
+    Fill: "HorizAlignment"
+    Justify: "HorizAlignment"
+
+class VertAlignment(Enum):
+    """Вертикальное выравнивание."""
+    Top: "VertAlignment"
+    Center: "VertAlignment"
+    Bottom: "VertAlignment"
+    Justify: "VertAlignment"
+
+class AlignSpec:
+    """Спецификация выравнивания для ячейки."""
+    def __init__(
+        self,
+        horiz: Optional[HorizAlignment] = None,
+        vert: Optional[VertAlignment] = None,
+        wrap: bool = False,
+    ) -> None: ...
+
+# --- СУЩЕСТВУЮЩИЕ И ОБНОВЛЕННЫЕ КЛАССЫ ---
 
 def scan_excel(path: str) -> List[str]: ...
 
@@ -11,13 +40,30 @@ class PyXlsxEditor:
     def save(self, path: str) -> None: ...
     def last_row_index(self, col_name: str) -> int: ...
     def last_rows_index(self, col_name: str) -> List[int]: ...
-    def with_polars(self, df: DataFrame, start_cell: Optional[str] = None) -> None: ...
+    def with_polars(self, df: DataFrame, start_cell: Optional[str] = None, default_width: float = 15.0) -> None: ...
     def add_worksheet(self, sheet_name: str) -> "PyXlsxEditor": ...
     def set_number_format(self, range: str, fmt: str) -> "PyXlsxEditor": ...
     def set_fill(self, range: str, fmt: str) -> "PyXlsxEditor": ...
     def merge_cells(self, range: str) -> "PyXlsxEditor": ...
     def set_border(self, range: str, style: str) -> "PyXlsxEditor": ...
-    def set_font(self, range: str, name: str, size: float, bold: bool, italic: bool) -> "PyXlsxEditor": ...
+    
+    # --- ОБНОВЛЕННЫЙ МЕТОД ---
+    def set_font(
+        self, 
+        range: str, 
+        name: str, 
+        size: float, 
+        bold: bool = False, 
+        italic: bool = False, 
+        align: Optional[AlignSpec] = None  # <-- Добавлен опциональный аргумент
+    ) -> "PyXlsxEditor": ...
+    
+    # --- НОВЫЙ МЕТОД ---
+    def set_alignment(self, range: str, spec: AlignSpec) -> "PyXlsxEditor": ...
+
+    def set_cell(self, coords: str, cell: str) -> None: ...
+    def set_column_width(self, col_letter: str, width: float) -> "PyXlsxEditor": ...
+    def set_columns_width(self, col_letters: List[str], width: float) -> "PyXlsxEditor": ...
 
 class PyXlsxScanner:
     def __init__(self, path: str) -> None: ...
