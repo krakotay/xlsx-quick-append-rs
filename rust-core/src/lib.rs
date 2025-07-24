@@ -1403,9 +1403,9 @@ impl XlsxEditor {
         // Parse the starting coordinate to get the initial column index and row number.
         let row_start_pos = start_coord
             .find(|c: char| c.is_ascii_digit())
-            .ok_or_else(|| XlsxError::InvalidCoordinate { 
-                coord: "no digits found".to_string() 
-            })?;
+            .ok_or_else(|| XlsxError::InvalidCoordinate {
+                coord: start_coord.to_string()
+            })?
         let col_letters = &start_coord[..row_start_pos];
         let start_col_idx = letters_to_col_idx(col_letters);
         let current_row_num: u32 = start_coord[row_start_pos..]
