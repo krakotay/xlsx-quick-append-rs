@@ -94,14 +94,14 @@ impl XlsxEditor {
 
     fn flush_current_sheet(&mut self) {
         let cur_path = self.sheet_path.clone();
-        let cur_xml  = self.sheet_xml.clone();
+        let cur_xml = self.sheet_xml.clone();
         if let Some((_, c)) = self.new_files.iter_mut().find(|(p, _)| p == &cur_path) {
             *c = cur_xml;
         } else {
             self.new_files.push((cur_path, cur_xml));
         }
     }
-    
+
     pub fn save<P: AsRef<Path>>(&mut self, dst: P) -> Result<()> {
         self.flush_current_sheet();
         let mut zin = zip_crate::ZipArchive::new(File::open(&self.src_path)?)?;
@@ -142,6 +142,9 @@ impl XlsxEditor {
                 "xl/styles.xml" => {
                     zout.start_file(name, opt)?;
                     zout.write_all(&self.styles_xml)?;
+                }
+                "xl/calcChain.xml" => {
+                    continue;
                 }
                 _ => zout.raw_copy_file(file)?,
             }
