@@ -97,7 +97,6 @@ impl Editor {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(Editor { editor: openned })
     }
-    #[pyo3(signature = (sheet_name))]
     fn add_worksheet<'py>(
         mut slf: PyRefMut<'py, Self>,
         sheet_name: &str,
@@ -107,6 +106,26 @@ impl Editor {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(slf)
     }
+    fn add_worksheet_at<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        sheet_name: &str,
+        index: usize
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.editor
+            .add_worksheet_at(sheet_name, index)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(slf)
+    }
+    fn with_worksheet<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        sheet_name: &str,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.editor
+            .with_worksheet(sheet_name)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(slf)
+    }
+
     fn set_cell(&mut self, coords: &str, cell: String) -> PyResult<()> {
         self.editor
             .set_cell(coords, cell)

@@ -1,5 +1,8 @@
 #[cfg(test)]
-use crate::{style::{AlignSpec, HorizAlignment, VertAlignment}, XlsxEditor, scan};
+use crate::{
+    XlsxEditor, scan,
+    style::{AlignSpec, HorizAlignment, VertAlignment},
+};
 #[cfg(test)]
 use anyhow::Result;
 #[test]
@@ -202,6 +205,25 @@ fn set_border_font_color() -> Result<()> {
         },
     )?
     .set_border("A1:C3", "thin")?;
+    xl.save(file_name_out)?;
+    Ok(())
+}
+
+#[test]
+fn add_worksheet() -> Result<()> {
+    let file_name = "../test/test.xlsx";
+    let file_name_out = "../test/add_worksheets_test.xlsx";
+
+    let mut xl: XlsxEditor = XlsxEditor::open(file_name, "Sheet1")?;
+    xl.add_worksheet("Sheet2")?;
+    xl.add_worksheet_at("TitleWS", 0)?;
+    xl.add_worksheet("Sheet3")?;
+    xl.with_worksheet("Sheet1")?
+        .append_table_at("A1", [["1", "2", "3"], ["1", "2", "3"], ["1", "2", "3"]])?;
+
+    xl.with_worksheet("Sheet2")?
+        .append_table_at("A1", [["4", "5", "6"], ["7", "8", "9"]])?;
+
     xl.save(file_name_out)?;
     Ok(())
 }
