@@ -84,18 +84,18 @@ fn scan_excel(path: PathBuf) -> PyResult<Vec<String>> {
     scan(&path).map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 #[pyclass]
-struct PyXlsxEditor {
+struct Editor {
     editor: XlsxEditor,
 }
 
 #[pymethods]
-impl PyXlsxEditor {
+impl Editor {
     #[new]
     #[pyo3(signature = (path, sheet_name))]
     fn new(path: PathBuf, sheet_name: &str) -> PyResult<Self> {
         let openned = XlsxEditor::open(path, sheet_name)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(PyXlsxEditor { editor: openned })
+        Ok(Editor { editor: openned })
     }
     #[pyo3(signature = (sheet_name))]
     fn add_worksheet<'py>(
@@ -272,29 +272,29 @@ impl PyXlsxEditor {
     }
 }
 #[pyclass]
-struct PyXlsxScanner {
+struct Scanner {
     path: PathBuf,
 }
 #[pymethods]
-impl PyXlsxScanner {
+impl Scanner {
     #[new]
     fn new(path: PathBuf) -> PyResult<Self> {
-        Ok(PyXlsxScanner { path })
+        Ok(Scanner { path })
     }
     fn get_sheets(&self) -> PyResult<Vec<String>> {
         scan_excel(self.path.clone()).map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
-    fn open_editor(&self, sheet_name: String) -> PyResult<PyXlsxEditor> {
+    fn open_editor(&self, sheet_name: String) -> PyResult<Editor> {
         let openned = XlsxEditor::open(self.path.clone(), &sheet_name)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(PyXlsxEditor { editor: openned })
+        Ok(Editor { editor: openned })
     }
 }
 
 #[pymodule]
 fn excelsior(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyXlsxEditor>()?;
-    m.add_class::<PyXlsxScanner>()?;
+    m.add_class::<Editor>()?;
+    m.add_class::<Scanner>()?;
     m.add_function(wrap_pyfunction!(scan_excel, m)?)?;
 
     // --- РЕГИСТРАЦИЯ НОВЫХ КЛАССОВ И ENUM-ОВ ---

@@ -1,4 +1,4 @@
-from excelsior import PyXlsxScanner, AlignSpec, HorizAlignment
+from excelsior import Scanner, AlignSpec, HorizAlignment
 import os
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -6,7 +6,7 @@ inp_filename = os.path.join(base_dir, "../../test/style_test.xlsx")
 
 out_filename = os.path.join(base_dir, "../../test/style_test_out_py.xlsx")
 
-scanner = PyXlsxScanner(inp_filename)
+scanner = Scanner(inp_filename)
 editor = scanner.open_editor(scanner.get_sheets()[0])
 # .set_fill("B24:B28", "FFFF00")\
 editor\

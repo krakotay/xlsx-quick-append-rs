@@ -47,10 +47,10 @@ Rust API.
 
 Example:
 ```python
-from excelsior import scan_excel, PyXlsxEditor
+from excelsior import scan_excel, Editor
 
 sheets = scan_excel("tests/test_sum.xlsx")
-editor = PyXlsxEditor("tests/test_sum.xlsx", sheets[0])
+editor = Editor("tests/test_sum.xlsx", sheets[0])
 editor.append_row(["Hello", "World"])
 editor.save("tests/result.xlsx")
 ```

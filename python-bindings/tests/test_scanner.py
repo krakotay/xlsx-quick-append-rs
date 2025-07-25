@@ -1,8 +1,8 @@
-from excelsior import PyXlsxScanner
+from excelsior import Scanner
 import os
 base_dir = os.path.dirname(os.path.abspath(__file__))
 file_path = os.path.join(base_dir, "../../test/test_scanner.xlsx")
-scanner = PyXlsxScanner(file_path)
+scanner = Scanner(file_path)
 print(scanner.get_sheets())
 assert scanner.get_sheets() == ["dog", "cat"]
 

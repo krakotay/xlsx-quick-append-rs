@@ -1,4 +1,4 @@
-from excelsior import PyXlsxScanner
+from excelsior import Scanner
 import polars as pl
 import os
 df = pl.DataFrame(
@@ -15,7 +15,7 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 inp_filename = os.path.join(base_dir, "../../test/test_polars.xlsx")
 out_filename = os.path.join(base_dir, "../../test/test_polars_appended.xlsx")
 
-scanner = PyXlsxScanner(inp_filename)
+scanner = Scanner(inp_filename)
 editor = scanner.open_editor(scanner.get_sheets()[0])
 # editor.with_polars(df, "A1")
 editor.add_worksheet('polars_ws').with_polars(df, "B4")

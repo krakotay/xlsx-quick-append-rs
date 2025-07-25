@@ -13,7 +13,7 @@ worksheet, insert a table starting from an arbitrary cell and update individual
 cells. Modified content can be saved to a new file or overwrite the
 original workbook.
 
-The Python bindings mirror this API in the `PyXlsxEditor` class and a
+The Python bindings mirror this API in the `Editor` class and a
 `scan_excel` function. Example scripts can be found in
 [`python-bindings/tests`](../python-bindings/tests).
 
