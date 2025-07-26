@@ -11,4 +11,4 @@ def generate_table(width: int, height: int):
 data = generate_table(5, 200)
 for row in data:
     ws.append(row)
-wb.save(os.path.join(base_dir, "100mb_appended_openpyxl.xlsx"))
+wb.save(os.path.join(base_dir, "100mb_openpyxl.xlsx"))

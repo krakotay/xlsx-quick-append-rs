@@ -9,4 +9,4 @@ def generate_table(width: int, height: int):
 data = generate_table(5, 200)
 for row in data:
     editor.append_row(row)
-editor.save(os.path.join(base_dir, "100mb_appended_xlsxeditor.xlsx"))
+editor.save(os.path.join(base_dir, "100mb_excelsior.xlsx"))

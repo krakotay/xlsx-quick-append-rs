@@ -9,19 +9,62 @@ mod read_part;
 pub mod style;
 mod test;
 use std::{
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
+    collections::HashMap, fs::File, io::Read, path::{Path, PathBuf}
 };
 
 use anyhow::{Context, Result, bail};
 use quick_xml::{Reader, Writer, events::Event};
+
+use crate::style::{AlignSpec, HorizAlignment, VertAlignment};
 // use regex::Regex;
 // use tempfile::NamedTempFile;
 // use zip::{ZipArchive, ZipWriter, write::FileOptions};
 
 /// `XlsxEditor` provides functionality to open, modify, and save XLSX files.
 /// It allows appending rows and tables to a specified sheet within an XLSX file.
+
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct FontKey {
+    name: String,
+    size_100: u32,
+    bold: bool,
+    italic: bool,
+}
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct StyleKey {
+    num_fmt_id: u32,
+    font_id: Option<u32>,
+    fill_id: Option<u32>,
+    border_id: Option<u32>,
+    align: Option<(Option<HorizAlignment>, Option<VertAlignment>, bool)>, // wrap
+}
+
+struct XfParts {
+    num_fmt_id: u32,
+    font_id: Option<u32>,
+    fill_id: Option<u32>,
+    border_id: Option<u32>,
+    align: Option<AlignSpec>,
+}
+
+
+struct StyleIndex {
+    xfs: Vec<XfParts>, // index == style_id
+
+    numfmt_by_code: HashMap<String, u32>,
+    next_custom_numfmt: u32, // >=164
+
+    font_by_key: HashMap<FontKey, u32>,
+    fill_by_rgb: HashMap<String, u32>,    // RGB в верхнем регистре
+    border_by_key: HashMap<String, u32>,  // единый style для всех сторон
+
+    xf_by_key: HashMap<StyleKey, u32>,
+
+    fonts_count: u32,
+    fills_count: u32,
+    borders_count: u32,
+}
+
 pub struct XlsxEditor {
     src_path: PathBuf,
     sheet_path: String,
@@ -31,6 +74,7 @@ pub struct XlsxEditor {
     workbook_xml: Vec<u8>,             // содержимое workbook.xml (может изменяться)
     rels_xml: Vec<u8>,                 // содержимое workbook.xml.rels
     new_files: Vec<(String, Vec<u8>)>, // новые или изменённые файлы для записи при save()
+    styles_index: Option<StyleIndex>,
 }
 
 /// Polars

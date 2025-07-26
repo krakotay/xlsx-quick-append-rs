@@ -1,4 +1,7 @@
-speed-all:
-	cd speed_tests && hyperfine "python excelsior_speed.py" "python openpyxl_speed.py" --export-markdown speed-test.md -M 3
+speed-all v="":
+	cd speed_tests && hyperfine "python excelsior_speed.py" "python openpyxl_speed.py" --export-markdown speed-test-{{v}}.md -M 3
 speed-rust:
 	cd speed_tests && hyperfine "python excelsior_speed.py" --export-markdown speed-excelsior.md -m 10
+
+speed-style v="":
+	cd speed_tests && hyperfine "python excelsior_speed_style.py"  --export-markdown speed-test-style-{{v}}.md -M 3

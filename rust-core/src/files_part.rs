@@ -1,3 +1,4 @@
+/// files_part.rs 
 use crate::{XlsxEditor, scan};
 use ::zip as zip_crate;
 use anyhow::{Context, Result, bail};
@@ -89,6 +90,8 @@ impl XlsxEditor {
             workbook_xml,
             rels_xml,
             new_files: Vec::new(),
+            styles_index: None, // ← ДОБАВЬТЕ ЭТО
+
         })
     }
 

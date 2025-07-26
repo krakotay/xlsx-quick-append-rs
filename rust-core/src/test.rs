@@ -121,7 +121,8 @@ fn set_border() -> Result<()> {
     let file_name_out = "../test/style_test_out_borders.xlsx";
 
     let mut xl: XlsxEditor = XlsxEditor::open(file_name, "Sheet1")?;
-    xl.set_border("A2:C3", "thin")?
+    xl
+        .set_border("A2:C3", "thin")?
         .set_fill("A2:C3", "FFCCCC")?
         .set_font("A2:C3", "Arial", 12.0, true, false)?
         .set_alignment(
@@ -142,32 +143,32 @@ fn set_border() -> Result<()> {
     xl.save(file_name_out)?;
     Ok(())
 }
-// #[test]
-// fn set_border_big_test() -> Result<()> {
-//     let file_name = "Шаблон53. РД Выборка.xlsx";
-//     let file_name_out = "Шаблон53. РД Выборка_out.xlsx";
-//     let sheets = &scan(file_name)?[0];
-//     let mut xl: XlsxEditor = XlsxEditor::open(file_name, sheets)?;
-//     xl.add_worksheet("SheetBigSheet")?
-//         .set_border("A2:C3", "thin")?
-//         .set_fill("A2:C3", "FFCCCC")?
-//         .set_font("A2:C3", "Arial", 12.0, true, false)?
-//         .set_column_width("A", 40.0)?
-//         .set_column_width("B", 40.0)?
-//         .set_column_width("C", 40.0)?
-//         .set_alignment(
-//             "A2:C3",
-//             &AlignSpec {
-//                 horiz: Some(HorizAlignment::Center),
+#[test]
+fn set_border_big_test() -> Result<()> {
+    let file_name = "Шаблон53. РД Выборка.xlsx";
+    let file_name_out = "Шаблон53. РД Выборка_out.xlsx";
+    let sheets = &scan(file_name)?[0];
+    let mut xl: XlsxEditor = XlsxEditor::open(file_name, sheets)?;
+    xl.add_worksheet("SheetBigSheet")?
+        .set_border("A2:C3", "thin")?
+        .set_fill("A2:C3", "FFCCCC")?
+        .set_font("A2:C3", "Arial", 12.0, true, false)?
+        .set_column_width("A", 40.0)?
+        .set_column_width("B", 40.0)?
+        .set_column_width("C", 40.0)?
+        .set_alignment(
+            "A2:C3",
+            &AlignSpec {
+                horiz: Some(HorizAlignment::Center),
 
-//                 vert: Some(VertAlignment::Bottom),
-//                 wrap: true,
-//             },
-//         )?
-//         .merge_cells("A3:C3")?;
-//     xl.save(file_name_out)?;
-//     Ok(())
-// }
+                vert: Some(VertAlignment::Bottom),
+                wrap: true,
+            },
+        )?
+        .merge_cells("A3:C3")?;
+    xl.save(file_name_out)?;
+    Ok(())
+}
 #[test]
 fn set_border_font_color() -> Result<()> {
     let file_name = "../test/style_test.xlsx";
@@ -242,6 +243,7 @@ fn test_write_polars() -> Result<()> {
 
     let df: DataFrame = DataFrame::new(vec![s1, s2])?;
     app.with_polars(&df, None)?;
+    app.add_worksheet("Sheet2")?.with_polars(&df, None)?;
     app.save(file_name.to_owned() + "_appended.xlsx")?;
     Ok(())
 }
