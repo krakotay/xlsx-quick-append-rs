@@ -1,5 +1,6 @@
 /// files_part.rs 
 use crate::{XlsxEditor, scan};
+use memchr::memmem;
 use ::zip as zip_crate;
 use anyhow::{Context, Result, bail};
 use quick_xml::{Reader, events::Event};
@@ -385,12 +386,12 @@ impl XlsxEditor {
             r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="{}"/>"#,
             new_rid, new_sheet_target
         );
-        if let Some(pos) = rels_xml.windows(16).rposition(|w| w == b"</Relationships>") {
-            rels_xml.splice(pos..pos, rel_tag.as_bytes().iter().copied());
+        if let Some(pos) = memmem::rfind(&rels_xml, b"</Relationships") {
+            rels_xml.splice(pos..pos, rel_tag.bytes());
         } else {
             bail!("</Relationships> not found in workbook.xml.rels");
         }
-
+                
         // -------- 7) минимальный XML нового листа ----------
         const EMPTY_SHEET: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">

@@ -3,7 +3,6 @@
 use anyhow::{Context, Result, bail};
 use memchr::memmem;
 use quick_xml::{Reader, events::Event};
-use regex::Regex;
 use std::collections::{BTreeMap, HashMap};
 use std::{fmt, str::FromStr};
 
@@ -103,24 +102,32 @@ enum Target {
 }
 
 fn parse_target(s: &str) -> Result<Target> {
-    let re_cell = Regex::new(r"^([A-Za-z]+)([0-9]+)$").unwrap();
-    let re_rect = Regex::new(r"^([A-Za-z]+[0-9]+):([A-Za-z]+[0-9]+)$").unwrap();
-    let re_col = Regex::new(r"^([A-Za-z]+):$").unwrap();
-    let re_row = Regex::new(r"^([0-9]+):$").unwrap();
-
-    if re_cell.is_match(s) {
-        return Ok(Target::Cell(s.to_owned()));
+    // столбец "A:" ?
+    if s.ends_with(':') && s[..s.len() - 1].bytes().all(|b| b.is_ascii_alphabetic()) {
+        return Ok(Target::Col(col_index(&s[..s.len() - 1]) as u32));
     }
-    if let Some(caps) = re_rect.captures(s) {
-        let (c0, r0) = split_coord(&caps[1]);
-        let (c1, r1) = split_coord(&caps[2]);
+    // строка "12:" ?
+    if s.ends_with(':') && s[..s.len() - 1].bytes().all(|b| b.is_ascii_digit()) {
+        return Ok(Target::Row(s[..s.len() - 1].parse()?));
+    }
+    // диапазон?
+    if let Some(colon) = s.find(':') {
+        let (a, b) = (&s[..colon], &s[colon + 1..]);
+        if a.ends_with(':') || b.is_empty() {
+            bail!("invalid range: {s}");
+        }
+        let (c0, r0) = split_coord(a);
+        let (c1, r1) = split_coord(b);
         return Ok(Target::Rect { c0, r0, c1, r1 });
     }
-    if let Some(caps) = re_col.captures(s) {
-        return Ok(Target::Col(col_index(&caps[1]) as u32));
-    }
-    if let Some(caps) = re_row.captures(s) {
-        return Ok(Target::Row(caps[1].parse::<u32>()?));
+
+    // ячейка "A12"
+    let p = s
+        .find(|c: char| c.is_ascii_digit())
+        .ok_or_else(|| anyhow::anyhow!("invalid"))?;
+    if s[..p].bytes().all(|b| b.is_ascii_alphabetic()) && s[p..].bytes().all(|b| b.is_ascii_digit())
+    {
+        return Ok(Target::Cell(s.to_owned()));
     }
     bail!("invalid range syntax: {s}");
 }
@@ -1053,7 +1060,7 @@ impl XlsxEditor {
             bold,
             italic,
         };
-    
+
         // 0) индекс/поиск
         {
             let ix = self.style_ix_mut()?;
@@ -1061,7 +1068,7 @@ impl XlsxEditor {
                 return Ok(id);
             }
         }
-    
+
         // 1) id до вставки
         let new_id = {
             let ix = self.style_ix_mut()?;
@@ -1070,33 +1077,37 @@ impl XlsxEditor {
             }
             ix.fonts_count
         };
-    
+
         // 2) XML
         let insert = memmem::rfind(&self.styles_xml, b"</fonts>")
             .context("<fonts> block not found in styles.xml")?;
         let mut xml = String::from("<font>");
-        if bold { xml.push_str("<b/>"); }
-        if italic { xml.push_str("<i/>"); }
+        if bold {
+            xml.push_str("<b/>");
+        }
+        if italic {
+            xml.push_str("<i/>");
+        }
         xml.push_str(&format!(r#"<sz val="{}"/>"#, (key.size_100 as f32) / 100.0));
         xml.push_str(&format!(r#"<name val="{}"/>"#, name));
         xml.push_str("</font>");
         self.styles_xml.splice(insert..insert, xml.bytes());
         bump_count(&mut self.styles_xml, b"<fonts", b"count=\"")?;
-    
+
         // 3) индекс
         {
             let ix = self.style_ix_mut()?;
             ix.font_by_key.insert(key, new_id);
             ix.fonts_count = new_id + 1;
         }
-    
+
         Ok(new_id)
     }
-    
+
     fn ensure_fill(&mut self, rgb: &str) -> Result<u32> {
         let mut key = rgb.to_string();
         key.make_ascii_uppercase();
-    
+
         // 0) индекс/поиск
         {
             let ix = self.style_ix_mut()?;
@@ -1104,7 +1115,7 @@ impl XlsxEditor {
                 return Ok(id);
             }
         }
-    
+
         // 1) id до вставки
         let new_id = {
             let ix = self.style_ix_mut()?;
@@ -1113,7 +1124,7 @@ impl XlsxEditor {
             }
             ix.fills_count
         };
-    
+
         // 2) XML
         let insert = memmem::rfind(&self.styles_xml, b"</fills>")
             .context("<fills> block not found in styles.xml")?;
@@ -1122,14 +1133,14 @@ impl XlsxEditor {
         );
         self.styles_xml.splice(insert..insert, xml.bytes());
         bump_count(&mut self.styles_xml, b"<fills", b"count=\"")?;
-    
+
         // 3) индекс
         {
             let ix = self.style_ix_mut()?;
             ix.fill_by_rgb.insert(key, new_id);
             ix.fills_count = new_id + 1;
         }
-    
+
         Ok(new_id)
     }
 
@@ -1141,7 +1152,7 @@ impl XlsxEditor {
                 return Ok(id);
             }
         }
-    
+
         // 1) Снимем "текущий" id ДО модификации XML
         let new_id = {
             let ix = self.style_ix_mut()?;
@@ -1151,7 +1162,7 @@ impl XlsxEditor {
             }
             ix.borders_count
         };
-    
+
         // 2) Вставляем XML
         let end_pos = memmem::rfind(&self.styles_xml, b"</borders>")
             .context("styles.xml: </borders> not found")?;
@@ -1161,17 +1172,17 @@ impl XlsxEditor {
         );
         self.styles_xml.splice(end_pos..end_pos, tag.bytes());
         bump_count(&mut self.styles_xml, b"<borders", b"count=\"")?;
-    
+
         // 3) Обновляем индекс ПОСЛЕ вставки, используя pre‑id
         {
             let ix = self.style_ix_mut()?;
             ix.border_by_key.insert(style.to_string(), new_id);
             ix.borders_count = new_id + 1;
         }
-    
+
         Ok(new_id)
     }
-    
+
     fn xf_components(&self, style_id: u32) -> Result<(Option<u32>, Option<u32>)> {
         let mut rdr = Reader::from_reader(self.styles_xml.as_slice());
         rdr.config_mut().trim_text(true);
@@ -1409,42 +1420,76 @@ impl XlsxEditor {
     fn force_column_number_format(&mut self, col0: u32, style_id: u32) -> Result<()> {
         self.set_column_properties(col0, None, Some(style_id))?;
 
-        let col_letter = col_letter(col0);
-        let sid_str = style_id.to_string();
-        let pat = format!(
-            r#"<c\b[^>]*\br="{}[0-9]+"[^>]*>"#,
-            col_letter.to_ascii_uppercase()
-        );
-        let re = Regex::new(&pat)?;
+        let col = col_letter(col0);
+        let col_up = col.to_ascii_uppercase();
+        let col_bytes = col_up.as_bytes();
+        let sid = style_id.to_string();
 
         let src = std::mem::take(&mut self.sheet_xml);
         let mut dst = Vec::with_capacity(src.len() + 512);
-        let mut last = 0usize;
 
-        let utf = std::str::from_utf8(&src)?;
-        for m in re.find_iter(utf) {
-            dst.extend_from_slice(&src[last..m.start()]);
+        let mut i = 0usize;
+        // Быстрый поиск повторяющегося шаблона
+        let finder = memmem::Finder::new(b"<c");
 
-            let cell_start = m.start();
-            let tag_end = find_bytes_from(&src, b">", cell_start).context("cell tag end")? + 1;
-            let mut cell = src[cell_start..tag_end].to_vec();
+        while let Some(off) = finder.find(&src[i..]) {
+            let start = i + off;
+            // все, что до <c...> — как есть
+            dst.extend_from_slice(&src[i..start]);
 
-            if let Some(p) = memmem::rfind(&cell, b" s=\"") {
-                let v0 = p + 4;
-                let v1 = find_bytes_from(&cell, b"\"", v0 + 1).context("closing quote")?;
-                cell.splice(v0..v1, sid_str.bytes());
-            } else {
-                let ins = if cell[cell.len() - 2] == b'/' {
-                    cell.len() - 2
-                } else {
-                    cell.len() - 1
-                };
-                cell.splice(ins..ins, format!(r#" s="{sid_str}""#).bytes());
+            // Защита от ложных совпадений вроде <col>, <cfRule> и т.п.
+            let next = *src.get(start + 2).unwrap_or(&b'>');
+            let is_cell = matches!(next, b' ' | b'>' | b'/' | b'r' | b's' | b't');
+            // границы тега
+            let tag_end = find_bytes_from(&src, b">", start).context("cell tag end")? + 1;
+
+            if !is_cell {
+                // не <c ...> ячейки — просто копируем тег
+                dst.extend_from_slice(&src[start..tag_end]);
+                i = tag_end;
+                continue;
             }
+
+            // копия тега, чтобы править атрибуты
+            let mut cell = src[start..tag_end].to_vec();
+
+            // ищем r="..."
+            if let Some(rpos) = find_bytes_from(&cell, b" r=\"", 0) {
+                let v0 = rpos + 4;
+                if let Some(v1) = find_bytes_from(&cell, b"\"", v0) {
+                    let val = &cell[v0..v1];
+                    // A..Z + цифры
+                    let ok = val.len() > col_bytes.len()
+                        && val[..col_bytes.len()]
+                            .iter()
+                            .map(|b| b.to_ascii_uppercase())
+                            .eq(col_bytes.iter().copied())
+                        && val[col_bytes.len()..].iter().all(|b| b.is_ascii_digit());
+
+                    if ok {
+                        // заменить/вставить s=".."
+                        if let Some(sp) = memmem::rfind(&cell, b" s=\"") {
+                            let s0 = sp + 4;
+                            let s1 =
+                                find_bytes_from(&cell, b"\"", s0 + 1).context("closing quote")?;
+                            cell.splice(s0..s1, sid.bytes());
+                        } else {
+                            let ins = if cell.len() >= 2 && cell[cell.len() - 2] == b'/' {
+                                cell.len() - 2
+                            } else {
+                                cell.len() - 1
+                            };
+                            cell.splice(ins..ins, format!(r#" s="{}""#, sid).bytes());
+                        }
+                    }
+                }
+            }
+
             dst.extend_from_slice(&cell);
-            last = tag_end;
+            i = tag_end;
         }
-        dst.extend_from_slice(&src[last..]);
+        // хвост
+        dst.extend_from_slice(&src[i..]);
         self.sheet_xml = dst;
         Ok(())
     }
@@ -1475,43 +1520,50 @@ impl XlsxEditor {
     }
 
     fn read_cols_map(&self, cols_start: usize, cols_end: usize) -> Result<BTreeMap<u32, ColProp>> {
-        let mut map: BTreeMap<u32, ColProp> = BTreeMap::new();
-        let cols_xml = &self.sheet_xml[cols_start..cols_end];
-        let text = std::str::from_utf8(cols_xml)?;
-        let re = Regex::new(r#"<col\b[^>]*/>"#)?;
-        let attrs_re = Regex::new(r#"([a-zA-Z:]+)\s*=\s*"([^"]*)""#)?;
+        let mut map = BTreeMap::new();
+        let slice = &self.sheet_xml[cols_start..cols_end];
+        let mut rdr = Reader::from_reader(slice);
+        rdr.config_mut().trim_text(true);
 
-        for m in re.find_iter(text) {
-            let tag = &text[m.start()..m.end()];
-            let mut attrs = BTreeMap::new();
-            for cap in attrs_re.captures_iter(tag) {
-                attrs.insert(cap[1].to_string(), cap[2].to_string());
-            }
+        while let Ok(ev) = rdr.read_event() {
+            match ev {
+                Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"col" => {
+                    let mut min = None;
+                    let mut max = None;
+                    let mut style = None;
+                    let mut width = None;
+                    let mut best_fit = false;
+                    let mut custom_width = false;
+                    let mut hidden = false;
 
-            let min: u32 = attrs.get("min").unwrap_or(&"1".to_string()).parse()?;
-            let max: u32 = attrs.get("max").unwrap_or(&min.to_string()).parse()?;
-
-            let style = attrs.get("style").and_then(|s| s.parse::<u32>().ok());
-            let width = attrs.get("width").and_then(|s| s.parse::<f64>().ok());
-            let best_fit = attrs
-                .get("bestFit")
-                .map_or(false, |v| v == "1" || v == "true");
-            let custom_width = attrs
-                .get("customWidth")
-                .map_or(false, |v| v == "1" || v == "true");
-            let hidden = attrs
-                .get("hidden")
-                .map_or(false, |v| v == "1" || v == "true");
-
-            let prop = ColProp {
-                width,
-                style,
-                best_fit,
-                custom_width,
-                hidden,
-            };
-            for i in min..=max {
-                map.insert(i, prop.clone());
+                    for a in e.attributes().with_checks(false).flatten() {
+                        let v = String::from_utf8_lossy(&a.value);
+                        match a.key.as_ref() {
+                            b"min" => min = Some(v.parse()?),
+                            b"max" => max = Some(v.parse()?),
+                            b"style" => style = v.parse().ok(),
+                            b"width" => width = v.parse().ok(),
+                            b"bestFit" => best_fit = v == "1" || v == "true",
+                            b"customWidth" => custom_width = v == "1" || v == "true",
+                            b"hidden" => hidden = v == "1" || v == "true",
+                            _ => {}
+                        }
+                    }
+                    let min = min.unwrap_or(1);
+                    let max = max.unwrap_or(min);
+                    let p = ColProp {
+                        width,
+                        style,
+                        best_fit,
+                        custom_width,
+                        hidden,
+                    };
+                    for i in min..=max {
+                        map.insert(i, p.clone());
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
             }
         }
         Ok(map)
@@ -1595,14 +1647,13 @@ pub fn split_coord(coord: &str) -> (u32, u32) {
         coord[p..].parse::<u32>().unwrap(),
     )
 }
-// fn find_bytes(hay: &[u8], needle: &[u8]) -> Option<usize> {
-//     hay.windows(needle.len()).position(|w| w == needle)
-// }
+#[inline]
 fn find_bytes_from(hay: &[u8], needle: &[u8], start: usize) -> Option<usize> {
-    hay[start..]
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|p| p + start)
+    if start >= hay.len() {
+        return None;
+    }
+    // поищем в срезе с нужного оффсета и поправим индекс
+    memmem::find(&hay[start..], needle).map(|i| i + start)
 }
 fn bump_count(xml: &mut Vec<u8>, tag: &[u8], attr: &[u8]) -> Result<()> {
     if let Some(pos) = memmem::rfind(xml, tag) {

@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "excelsior"
-version = "0.8.0-alpha1"
+version = "0.8.0-alpha2"
 dependencies = [
  "anyhow",
  "pyo3",
@@ -1128,16 +1128,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
 
 [[package]]
-name = "libmimalloc-sys"
-version = "0.1.43"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf88cd67e9de251c1781dbe2f641a1a3ad66eaae831b8a2c38fbdc5ddae16d4d"
-dependencies = [
- "cc",
- "libc",
-]
-
-[[package]]
 name = "libz-rs-sys"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1227,15 +1217,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "mimalloc"
-version = "0.1.47"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1791cbe101e95af5764f06f20f6760521f7158f69dbf9d6baf941ee1bf6bc40"
-dependencies = [
- "libmimalloc-sys",
 ]
 
 [[package]]
@@ -2345,14 +2326,12 @@ dependencies = [
 
 [[package]]
 name = "rust-core"
-version = "0.8.0-alpha1"
+version = "0.8.0-alpha2"
 dependencies = [
  "anyhow",
  "memchr",
- "mimalloc",
  "polars-core",
  "quick-xml 0.38.0",
- "regex",
  "tempfile",
  "zip",
 ]

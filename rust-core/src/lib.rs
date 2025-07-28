@@ -2,7 +2,6 @@
 
 // #[global_allocator]
 // static GLOBAL: MiMalloc = MiMalloc;
-
 pub mod files_part;
 mod polars_part;
 mod read_part;
@@ -16,7 +15,6 @@ use anyhow::{Context, Result, bail};
 use quick_xml::{Reader, Writer, events::Event};
 
 use crate::style::{AlignSpec, HorizAlignment, VertAlignment};
-// use regex::Regex;
 // use tempfile::NamedTempFile;
 // use zip::{ZipArchive, ZipWriter, write::FileOptions};
 
