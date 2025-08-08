@@ -1,5 +1,5 @@
 /// files_part.rs
-use crate::{XlsxEditor, scan};
+use crate::{find_bytes_from, scan, XlsxEditor};
 use ::zip as zip_crate;
 use anyhow::{Context, Result, bail};
 use memchr::memmem;
@@ -107,16 +107,19 @@ impl XlsxEditor {
     }
 
     pub fn save<P: AsRef<Path>>(&mut self, dst: P) -> Result<()> {
+        
         self.flush_current_sheet();
         let mut zin = zip_crate::ZipArchive::new(File::open(&self.src_path)?)?;
         let mut zout = zip_crate::ZipWriter::new(File::create(dst)?);
 
-        let deflated: zip_crate::write::FileOptions<'_, ()> = zip_crate::write::FileOptions::default()
-            .compression_method(zip_crate::CompressionMethod::Deflated)
-            .compression_level(Some(1));
+        let deflated: zip_crate::write::FileOptions<'_, ()> =
+            zip_crate::write::FileOptions::default()
+                .compression_method(zip_crate::CompressionMethod::Deflated)
+                .compression_level(Some(1));
 
-        let stored: zip_crate::write::FileOptions<'_, ()> = zip_crate::write::FileOptions::default()
-            .compression_method(zip_crate::CompressionMethod::Stored);
+        let stored: zip_crate::write::FileOptions<'_, ()> =
+            zip_crate::write::FileOptions::default()
+                .compression_method(zip_crate::CompressionMethod::Stored);
 
         use std::collections::HashSet;
         let mut written: HashSet<String> = HashSet::new();
@@ -170,14 +173,16 @@ impl XlsxEditor {
                     zout.write_all(content)?;
                 }
                 "xl/styles.xml" => {
-                    let content = &self.styles_xml;
+                    let mut content = self.styles_xml.clone();
+                    normalize_styles_root(&mut content);
+
                     let opt = if should_store_uncompressed(name, content.len()) {
                         stored
                     } else {
                         deflated
                     };
                     zout.start_file(name, opt)?;
-                    zout.write_all(content)?;
+                    zout.write_all(&content)?;
                 }
                 "xl/calcChain.xml" => {
                     continue;
@@ -643,4 +648,25 @@ fn xml_escape(s: &str) -> String {
 fn should_store_uncompressed(name: &str, content_len: usize) -> bool {
     // Можно подобрать порог — эмпирически 64–128 КБ дают профит
     name.ends_with(".xml") && content_len <= 128 * 1024
+}
+fn normalize_styles_root(xml: &mut Vec<u8>) {
+    if let Some(end_root) = memmem::rfind(xml, b"</styleSheet>") {
+        let tail_start = end_root + "</styleSheet>".len();
+        if tail_start < xml.len() {
+            if let Some(nf) = memmem::find(&xml[tail_start..], b"<numFmts") {
+                // вырезаем хвост <numFmts>...</numFmts>
+                let nf_abs = tail_start + nf;
+                let close = memmem::find(&xml[nf_abs..], b"</numFmts>")
+                    .map(|p| nf_abs + p + "</numFmts>".len());
+                if let Some(nf_end) = close {
+                    let chunk: Vec<u8> = xml[nf_abs..nf_end].to_vec();
+                    xml.splice(nf_abs..nf_end, std::iter::empty());
+                    // вставляем внутрь корня (см. логику из пункта 1/2)
+                    let root = memmem::find(&xml, b"<styleSheet").unwrap();
+                    let insert = find_bytes_from(&xml, b">", root).unwrap() + 1;
+                    xml.splice(insert..insert, chunk.into_iter());
+                }
+            }
+        }
+    }
 }

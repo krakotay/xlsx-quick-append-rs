@@ -627,7 +627,6 @@ impl XlsxEditor {
 
 /* ========================== CORE PATCH ENGINE ============================= */
 
-
 impl XlsxEditor {
     #[inline]
     fn get_or_make_sid(
@@ -1055,10 +1054,17 @@ impl XlsxEditor {
             self.styles_xml.splice(end..end, tag.bytes());
             bump_count(&mut self.styles_xml, b"<numFmts", b"count=\"")?;
         } else {
-            let insert = memmem::rfind(&self.styles_xml, b">")
-                .context("<styleSheet> start tag not found")?
+            let root = memmem::find(&self.styles_xml, b"<styleSheet")
+                .context("<styleSheet> root not found in styles.xml")?;
+            let insert = find_bytes_from(&self.styles_xml, b">", root)
+                .context("<styleSheet> start tag '>' not found")?
                 + 1;
+
             let block = format!(r#"<numFmts count="1">{tag}</numFmts>"#);
+            let before_fonts = memmem::find(&self.styles_xml, b"<fonts").unwrap_or(insert);
+            self.styles_xml
+                .splice(before_fonts..before_fonts, block.bytes());
+
             self.styles_xml.splice(insert..insert, block.bytes());
         }
 
