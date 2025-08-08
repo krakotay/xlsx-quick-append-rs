@@ -1051,23 +1051,26 @@ impl XlsxEditor {
         // C) правим XML
         let tag = format!(r#"<numFmt numFmtId="{new_id}" formatCode="{code}"/>"#);
         if let Some(end) = memmem::rfind(&self.styles_xml, b"</numFmts>") {
+            // блок уже есть → просто дописываем внутрь и бампим count
             self.styles_xml.splice(end..end, tag.bytes());
             bump_count(&mut self.styles_xml, b"<numFmts", b"count=\"")?;
         } else {
+            // блока нет → создаём РОВНО один
             let root = memmem::find(&self.styles_xml, b"<styleSheet")
                 .context("<styleSheet> root not found in styles.xml")?;
-            let insert = find_bytes_from(&self.styles_xml, b">", root)
+            let after_root = find_bytes_from(&self.styles_xml, b">", root)
                 .context("<styleSheet> start tag '>' not found")?
                 + 1;
 
+            // старайся соблюдать порядок: numFmts должен стоять до <fonts>
+            let before_fonts = memmem::find(&self.styles_xml, b"<fonts").unwrap_or(after_root);
+
             let block = format!(r#"<numFmts count="1">{tag}</numFmts>"#);
-            let before_fonts = memmem::find(&self.styles_xml, b"<fonts").unwrap_or(insert);
             self.styles_xml
                 .splice(before_fonts..before_fonts, block.bytes());
 
-            self.styles_xml.splice(insert..insert, block.bytes());
+            // ← ВАЖНО: НЕ делать вторую вставку по insert..insert
         }
-
         // D) обновляем индекс
         {
             let ix = self.style_ix_mut()?;
