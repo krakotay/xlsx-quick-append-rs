@@ -1,8 +1,8 @@
-/// files_part.rs 
+/// files_part.rs
 use crate::{XlsxEditor, scan};
-use memchr::memmem;
 use ::zip as zip_crate;
 use anyhow::{Context, Result, bail};
+use memchr::memmem;
 use quick_xml::{Reader, events::Event};
 use std::{
     fs::File,
@@ -91,8 +91,8 @@ impl XlsxEditor {
             workbook_xml,
             rels_xml,
             new_files: Vec::new(),
-            styles_index: None, // ← ДОБАВЬТЕ ЭТО
-
+            styles_index: None,
+            loaded_files: std::collections::HashMap::new(), // ← добавлено
         })
     }
 
@@ -111,9 +111,12 @@ impl XlsxEditor {
         let mut zin = zip_crate::ZipArchive::new(File::open(&self.src_path)?)?;
         let mut zout = zip_crate::ZipWriter::new(File::create(dst)?);
 
-        let opt: zip_crate::write::FileOptions<'_, ()> = zip_crate::write::FileOptions::default()
+        let deflated: zip_crate::write::FileOptions<'_, ()> = zip_crate::write::FileOptions::default()
             .compression_method(zip_crate::CompressionMethod::Deflated)
             .compression_level(Some(1));
+
+        let stored: zip_crate::write::FileOptions<'_, ()> = zip_crate::write::FileOptions::default()
+            .compression_method(zip_crate::CompressionMethod::Stored);
 
         use std::collections::HashSet;
         let mut written: HashSet<String> = HashSet::new();
@@ -122,8 +125,13 @@ impl XlsxEditor {
             let file = zin.by_index_raw(i)?;
             let name = file.name();
 
+            // Если есть новая версия файла — пишем её
             if let Some((_, content)) = self.new_files.iter().find(|(p, _)| p == name) {
-                // файл был создан/изменён в памяти – записываем его
+                let opt = if should_store_uncompressed(name, content.len()) {
+                    stored
+                } else {
+                    deflated
+                };
                 zout.start_file(name, opt)?;
                 zout.write_all(content)?;
                 written.insert(name.to_string());
@@ -132,20 +140,44 @@ impl XlsxEditor {
 
             match name {
                 "xl/workbook.xml" => {
+                    let content = &self.workbook_xml;
+                    let opt = if should_store_uncompressed(name, content.len()) {
+                        stored
+                    } else {
+                        deflated
+                    };
                     zout.start_file(name, opt)?;
-                    zout.write_all(&self.workbook_xml)?;
+                    zout.write_all(content)?;
                 }
                 "xl/_rels/workbook.xml.rels" => {
+                    let content = &self.rels_xml;
+                    let opt = if should_store_uncompressed(name, content.len()) {
+                        stored
+                    } else {
+                        deflated
+                    };
                     zout.start_file(name, opt)?;
-                    zout.write_all(&self.rels_xml)?;
+                    zout.write_all(content)?;
                 }
                 _ if name == self.sheet_path => {
+                    let content = &self.sheet_xml;
+                    let opt = if should_store_uncompressed(name, content.len()) {
+                        stored
+                    } else {
+                        deflated
+                    };
                     zout.start_file(name, opt)?;
-                    zout.write_all(&self.sheet_xml)?;
+                    zout.write_all(content)?;
                 }
                 "xl/styles.xml" => {
+                    let content = &self.styles_xml;
+                    let opt = if should_store_uncompressed(name, content.len()) {
+                        stored
+                    } else {
+                        deflated
+                    };
                     zout.start_file(name, opt)?;
-                    zout.write_all(&self.styles_xml)?;
+                    zout.write_all(content)?;
                 }
                 "xl/calcChain.xml" => {
                     continue;
@@ -154,9 +186,14 @@ impl XlsxEditor {
             }
         }
 
-        // добавляем файлы, которые ещё не были записаны
+        // дозапись новых файлов, которых не было в исходном архиве
         for (path, content) in &self.new_files {
             if !written.contains(path) {
+                let opt = if should_store_uncompressed(path, content.len()) {
+                    stored
+                } else {
+                    deflated
+                };
                 zout.start_file(path, opt)?;
                 if path == &self.sheet_path {
                     zout.write_all(&self.sheet_xml)?;
@@ -165,9 +202,6 @@ impl XlsxEditor {
                 }
                 written.insert(path.clone());
             }
-        }
-        for (p, _) in &self.new_files {
-            eprintln!("new_files has {}", p);
         }
 
         zout.finish()?;
@@ -307,6 +341,7 @@ impl XlsxEditor {
         let new_sheet_target = format!("worksheets/sheet{new}.xml", new = new_sheet_file);
 
         // -------- 3) распарсим текущие <sheet .../> из workbook.xml ----------
+        #[allow(dead_code)]
         #[derive(Debug, Clone)]
         struct SheetTag {
             name: String,
@@ -367,7 +402,7 @@ impl XlsxEditor {
         for (i, sh) in sheets.iter().enumerate() {
             let sheet_id = (i as u32) + 1; // «естественная» нумерация
             let line = format!(
-                r#"\n  <sheet name="{}" sheetId="{}" r:id="{}"/>"#,
+                "\n  <sheet name=\"{}\" sheetId=\"{}\" r:id=\"{}\"/>",
                 xml_escape(&sh.name),
                 sheet_id,
                 sh.rid
@@ -391,7 +426,7 @@ impl XlsxEditor {
         } else {
             bail!("</Relationships> not found in workbook.xml.rels");
         }
-                
+
         // -------- 7) минимальный XML нового листа ----------
         const EMPTY_SHEET: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -546,9 +581,12 @@ impl XlsxEditor {
         };
 
         // 4) Достаём XML листа: сперва смотрим в new_files, иначе читаем из ZIP
+        // 4) Достаём XML листа: сперва new_files, потом кэш, иначе из ZIP
         let sheet_xml: Vec<u8> =
             if let Some((_, content)) = self.new_files.iter().find(|(p, _)| p == &new_sheet_path) {
                 content.clone()
+            } else if let Some(buf) = self.loaded_files.get(&new_sheet_path) {
+                buf.clone()
             } else {
                 let mut zin = zip_crate::ZipArchive::new(File::open(&self.src_path)?)?;
                 let mut f = zin
@@ -556,6 +594,8 @@ impl XlsxEditor {
                     .with_context(|| format!("{} not found in zip", new_sheet_path))?;
                 let mut buf = Vec::with_capacity(f.size() as usize);
                 f.read_to_end(&mut buf)?;
+                self.loaded_files
+                    .insert(new_sheet_path.clone(), buf.clone()); // ← кэшируем
                 buf
             };
 
@@ -599,4 +639,8 @@ fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+fn should_store_uncompressed(name: &str, content_len: usize) -> bool {
+    // Можно подобрать порог — эмпирически 64–128 КБ дают профит
+    name.ends_with(".xml") && content_len <= 128 * 1024
 }

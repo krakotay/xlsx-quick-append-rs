@@ -162,7 +162,7 @@ impl StyleIndex {
                     let mut code = None::<String>;
                     for a in e.attributes().with_checks(false).flatten() {
                         match a.key.as_ref() {
-                            b"numFmtId" => id = Some(String::from_utf8_lossy(&a.value).parse()?),
+                            b"numFmtId" => id = Some(lexical_core::parse(&a.value)?),
                             b"formatCode" => code = Some(String::from_utf8_lossy(&a.value).into()),
                             _ => {}
                         }
@@ -435,20 +435,11 @@ impl StyleIndex {
 
                     for a in e.attributes().with_checks(false).flatten() {
                         match a.key.as_ref() {
-                            b"numFmtId" => {
-                                num_fmt_id = String::from_utf8_lossy(&a.value).parse().unwrap_or(0)
-                            }
-                            b"fontId" => {
-                                font_id =
-                                    Some(String::from_utf8_lossy(&a.value).parse().unwrap_or(0))
-                            }
-                            b"fillId" => {
-                                fill_id =
-                                    Some(String::from_utf8_lossy(&a.value).parse().unwrap_or(0))
-                            }
+                            b"numFmtId" => num_fmt_id = lexical_core::parse(&a.value).unwrap_or(0),
+                            b"fontId" => font_id = Some(lexical_core::parse(&a.value).unwrap_or(0)),
+                            b"fillId" => fill_id = Some(lexical_core::parse(&a.value).unwrap_or(0)),
                             b"borderId" => {
-                                border_id =
-                                    Some(String::from_utf8_lossy(&a.value).parse().unwrap_or(0))
+                                border_id = Some(lexical_core::parse(&a.value).unwrap_or(0))
                             }
                             _ => {}
                         }
@@ -636,6 +627,199 @@ impl XlsxEditor {
 
 /* ========================== CORE PATCH ENGINE ============================= */
 
+
+impl XlsxEditor {
+    #[inline]
+    fn get_or_make_sid(
+        &mut self,
+        cache: &mut HashMap<Option<u32>, u32>,
+        old_sid: Option<u32>,
+        patch: &StyleParts,
+    ) -> u32 {
+        if let Some(&sid) = cache.get(&old_sid) {
+            return sid;
+        }
+        let old_parts = self.read_style_parts(old_sid).unwrap();
+        let merged = merge_style_parts(old_parts, patch);
+        let sid = self.ensure_style_from_parts(&merged).unwrap();
+        cache.insert(old_sid, sid);
+        sid
+    }
+
+    /// Быстрый однопроходный патч диапазона: правит стиль только у существующих <c ...>.
+    fn apply_patch_rect_one_pass(
+        &mut self,
+        c0: u32,
+        r0: u32,
+        c1: u32,
+        r1: u32,
+        patch: &StyleParts,
+    ) -> Result<()> {
+        let mut sid_cache: HashMap<Option<u32>, u32> = HashMap::new();
+
+        // забираем исходный буфер, чтобы свободно писать новый
+        let src = std::mem::take(&mut self.sheet_xml);
+        let mut dst = Vec::with_capacity(src.len() + 512);
+
+        let find_row = memmem::Finder::new(b"<row ");
+        let find_cell_open = memmem::Finder::new(b"<c ");
+        let find_cell_selfclose = memmem::Finder::new(b"<c/");
+        let find_gt = memmem::Finder::new(b">");
+
+        let mut i = 0usize;
+
+        while let Some(off) = find_row.find(&src[i..]) {
+            let row_start = i + off;
+            // всё до <row ...> — как есть
+            dst.extend_from_slice(&src[i..row_start]);
+
+            // конец открывающего тега <row ...>
+            let row_tag_end =
+                find_gt.find(&src[row_start..]).context("malformed <row>")? + row_start;
+
+            // r="...":
+            let mut row_r: Option<u32> = None;
+            if let Some(pos) = find_bytes_from(&src, b" r=\"", row_start) {
+                if pos < row_tag_end {
+                    let v0 = pos + 4;
+                    if let Some(v1) = find_bytes_from(&src, b"\"", v0) {
+                        row_r = lexical_core::parse::<u32>(&src[v0..v1]).ok();
+                    }
+                }
+            }
+
+            // границы строки
+            let row_end =
+                find_bytes_from(&src, b"</row>", row_tag_end).context("</row> not found")?;
+            let row_close_end = row_end + "</row>".len();
+
+            let Some(cur_row) = row_r else {
+                // нет номера — просто копируем как есть
+                dst.extend_from_slice(&src[row_start..row_close_end]);
+                i = row_close_end;
+                continue;
+            };
+
+            if cur_row < r0 || cur_row > r1 {
+                // вне диапазона — копируем как есть
+                dst.extend_from_slice(&src[row_start..row_close_end]);
+                i = row_close_end;
+                continue;
+            }
+
+            // строка в диапазоне — копируем заголовок <row ...>
+            dst.extend_from_slice(&src[row_start..=row_tag_end]);
+
+            // обрабатываем содержимое до </row>
+            let mut j = row_tag_end + 1;
+            while j < row_end {
+                // следующий <c ...> (включая самозакрывающийся)
+                let next_open = find_cell_open.find(&src[j..]).map(|p| j + p);
+                let next_sc = find_cell_selfclose.find(&src[j..]).map(|p| j + p);
+                let next_cell = match (next_open, next_sc) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    (None, None) => None,
+                };
+
+                match next_cell {
+                    None => {
+                        dst.extend_from_slice(&src[j..row_end]);
+                        break;
+                    }
+                    Some(cpos) if cpos >= row_end => {
+                        dst.extend_from_slice(&src[j..row_end]);
+                        break;
+                    }
+                    Some(cpos) => {
+                        // всё до <c...>
+                        dst.extend_from_slice(&src[j..cpos]);
+
+                        // граница тега
+                        let tag_end = find_gt.find(&src[cpos..]).context("cell tag end")? + cpos;
+                        let self_closing = tag_end >= 1 && src[tag_end - 1] == b'/';
+
+                        // локальная копия тега для правки атрибутов
+                        let mut cell_tag = src[cpos..=tag_end].to_vec();
+
+                        // r="A12" → проверяем колонку
+                        let mut col_in_range = false;
+                        if let Some(rpos) = find_bytes_from(&cell_tag, b" r=\"", 0) {
+                            let v0 = rpos + 4;
+                            if let Some(v1) = find_bytes_from(&cell_tag, b"\"", v0) {
+                                let val = &cell_tag[v0..v1];
+                                if let Some(p) = val.iter().position(|b| b.is_ascii_digit()) {
+                                    // считаем индекс колонки
+                                    let mut ci: u32 = 0;
+                                    for &b in &val[..p] {
+                                        let u = (b as char).to_ascii_uppercase() as u8;
+                                        ci = ci * 26 + ((u - b'A') as u32 + 1);
+                                    }
+                                    let ci0 = ci - 1;
+                                    col_in_range = ci0 >= c0 && ci0 <= c1;
+                                }
+                            }
+                        }
+
+                        if col_in_range {
+                            // старый s=".."
+                            let old_sid = if let Some(sp) = find_bytes_from(&cell_tag, b" s=\"", 0)
+                            {
+                                let s0 = sp + 4;
+                                let s1 = find_bytes_from(&cell_tag, b"\"", s0 + 1)
+                                    .context("attr quote")?;
+                                lexical_core::parse::<u32>(&cell_tag[s0..s1]).ok()
+                            } else {
+                                None
+                            };
+
+                            let new_sid = self.get_or_make_sid(&mut sid_cache, old_sid, patch);
+
+                            // заменить/вставить s="..."
+                            if let Some(sp) = find_bytes_from(&cell_tag, b" s=\"", 0) {
+                                let s0 = sp + 4;
+                                let s1 = find_bytes_from(&cell_tag, b"\"", s0 + 1)
+                                    .context("attr quote")?;
+                                cell_tag.splice(s0..s1, new_sid.to_string().bytes());
+                            } else {
+                                let ins = if self_closing {
+                                    cell_tag.len() - 2
+                                } else {
+                                    cell_tag.len() - 1
+                                };
+                                cell_tag.splice(ins..ins, format!(r#" s="{}""#, new_sid).bytes());
+                            }
+                        }
+
+                        // пишем тег
+                        dst.extend_from_slice(&cell_tag);
+
+                        if self_closing {
+                            j = tag_end + 1;
+                        } else {
+                            // копируем содержимое ячейки до </c>
+                            let c_close = find_bytes_from(&src, b"</c>", tag_end + 1)
+                                .context("</c> missing")?;
+                            dst.extend_from_slice(&src[tag_end + 1..=c_close + 3]);
+                            j = c_close + 4;
+                        }
+                    }
+                }
+            }
+
+            // закрытие строки
+            dst.extend_from_slice(&src[row_end..row_close_end]);
+            i = row_close_end;
+        }
+
+        // хвост документа
+        dst.extend_from_slice(&src[i..]);
+        self.sheet_xml = dst;
+        Ok(())
+    }
+}
+
 impl XlsxEditor {
     fn apply_patch(&mut self, range: &str, patch: StyleParts) -> Result<()> {
         let mut sid_cache: HashMap<Option<u32>, u32> = HashMap::new();
@@ -651,18 +835,7 @@ impl XlsxEditor {
                 self.apply_style_to_cell(&cell, new_sid)?;
             }
             Target::Rect { c0, r0, c1, r1 } => {
-                for r in r0..=r1 {
-                    for c in c0..=c1 {
-                        let coord = format!("{}{}", col_letter(c), r);
-                        let sid = self.cell_style_id(&coord)?;
-                        let new_sid = *sid_cache.entry(sid).or_insert_with(|| {
-                            let old = self.read_style_parts(sid).unwrap();
-                            let merged = merge_style_parts(old, &patch);
-                            self.ensure_style_from_parts(&merged).unwrap()
-                        });
-                        self.apply_style_to_cell(&coord, new_sid)?;
-                    }
-                }
+                self.apply_patch_rect_one_pass(c0, r0, c1, r1, &patch)?
             }
             _ => bail!("Row/Col-level styling not implemented in this snippet"),
         }
@@ -950,10 +1123,10 @@ impl XlsxEditor {
                     let mut bdr = None::<u32>;
                     for a in e.attributes().with_checks(false).flatten() {
                         match a.key.as_ref() {
-                            b"numFmtId" => num = Some(String::from_utf8_lossy(&a.value).parse()?),
-                            b"fontId" => fnt = Some(String::from_utf8_lossy(&a.value).parse()?),
-                            b"fillId" => fil = Some(String::from_utf8_lossy(&a.value).parse()?),
-                            b"borderId" => bdr = Some(String::from_utf8_lossy(&a.value).parse()?),
+                            b"numFmtId" => num = Some(lexical_core::parse(&a.value)?),
+                            b"fontId" => fnt = Some(lexical_core::parse(&a.value)?),
+                            b"fillId" => fil = Some(lexical_core::parse(&a.value)?),
+                            b"borderId" => bdr = Some(lexical_core::parse(&a.value)?),
                             _ => {}
                         }
                     }
@@ -1200,12 +1373,8 @@ impl XlsxEditor {
                         let mut fill = None;
                         for a in e.attributes().with_checks(false).flatten() {
                             match a.key.as_ref() {
-                                b"fontId" => {
-                                    font = Some(String::from_utf8_lossy(&a.value).parse()?)
-                                }
-                                b"fillId" => {
-                                    fill = Some(String::from_utf8_lossy(&a.value).parse()?)
-                                }
+                                b"fontId" => font = Some(lexical_core::parse(&a.value)?),
+                                b"fillId" => fill = Some(lexical_core::parse(&a.value)?),
                                 _ => {}
                             }
                         }
@@ -1235,7 +1404,7 @@ impl XlsxEditor {
                     if idx == style_id {
                         for a in e.attributes().with_checks(false).flatten() {
                             if a.key.as_ref() == b"borderId" {
-                                let val: u32 = String::from_utf8_lossy(&a.value).parse()?;
+                                let val: u32 = lexical_core::parse(&a.value)?;
                                 return Ok(Some(val));
                             }
                         }

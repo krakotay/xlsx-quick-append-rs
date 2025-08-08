@@ -8,7 +8,10 @@ mod read_part;
 pub mod style;
 mod test;
 use std::{
-    collections::HashMap, fs::File, io::Read, path::{Path, PathBuf}
+    collections::HashMap,
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
@@ -36,7 +39,7 @@ struct StyleKey {
     border_id: Option<u32>,
     align: Option<(Option<HorizAlignment>, Option<VertAlignment>, bool)>, // wrap
 }
-
+#[allow(dead_code)]
 struct XfParts {
     num_fmt_id: u32,
     font_id: Option<u32>,
@@ -45,7 +48,6 @@ struct XfParts {
     align: Option<AlignSpec>,
 }
 
-
 struct StyleIndex {
     xfs: Vec<XfParts>, // index == style_id
 
@@ -53,8 +55,8 @@ struct StyleIndex {
     next_custom_numfmt: u32, // >=164
 
     font_by_key: HashMap<FontKey, u32>,
-    fill_by_rgb: HashMap<String, u32>,    // RGB в верхнем регистре
-    border_by_key: HashMap<String, u32>,  // единый style для всех сторон
+    fill_by_rgb: HashMap<String, u32>,   // RGB в верхнем регистре
+    border_by_key: HashMap<String, u32>, // единый style для всех сторон
 
     xf_by_key: HashMap<StyleKey, u32>,
 
@@ -73,6 +75,7 @@ pub struct XlsxEditor {
     rels_xml: Vec<u8>,                 // содержимое workbook.xml.rels
     new_files: Vec<(String, Vec<u8>)>, // новые или изменённые файлы для записи при save()
     styles_index: Option<StyleIndex>,
+    loaded_files: std::collections::HashMap<String, Vec<u8>>,
 }
 
 /// Polars
